@@ -1,4 +1,4 @@
-use std::{io::{Read}, net::{TcpListener, TcpStream}};
+use std::{io::{Read, Result}, net::{TcpListener, TcpStream}};
 
 fn handle_client(mut stream: TcpStream) {
     let mut buf = [0u8; 4096];
@@ -7,7 +7,7 @@ fn handle_client(mut stream: TcpStream) {
     println!("{}", String::from_utf8_lossy(&buf[..n]));
 }
 
-pub fn start() -> std::io::Result<()> {
+pub fn start() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:8080")?;
 
     for stream in listener.incoming() {
