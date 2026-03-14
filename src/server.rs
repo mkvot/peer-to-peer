@@ -1,5 +1,6 @@
 use crate::http::parse_request;
 use crate::routes::{handle_peers, handle_ping};
+use std::sync::{Arc, Mutex};
 use std::{
     io::{Read, Result},
     net::{TcpListener, TcpStream},
@@ -25,9 +26,9 @@ fn handle_client(mut stream: TcpStream) -> Result<()> {
     }
 }
 
-pub fn start(port: String) -> Result<()> {
+pub fn start(port: String, peers: Arc<Mutex<Vec<String>>>) -> Result<()> {
     let ip = "127.0.0.1";
-    let addr = format!("{}:{}", ip, port);
+    let addr = format!("{ip}:{port}");
     let listener = TcpListener::bind(addr)?;
 
     for stream in listener.incoming() {
