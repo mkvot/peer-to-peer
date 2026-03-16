@@ -2,18 +2,29 @@ mod client;
 mod http;
 mod routes;
 mod server;
-use std::{env, io::Result, sync::{Arc, Mutex}, thread};
+use std::{env, fs, io::Result, sync::{Arc, Mutex}, thread};
 
 fn main() -> Result<()> {
-    println!("Started application");
-
     let peers: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    peers.lock().unwrap().push(String::from("127.0.0.1:8080"));
+
+    if let Some(path) = env::args().nth(1) {
+        let json = fs::read_to_string(path).unwrap();
+        let peer_info: Vec<String> = serde_json::from_str(&json).expect("failed to parse json");
+        let mut guard = peers.lock().unwrap();
+        *guard = peer_info;
+
+        println!("Got peers from file:");
+        for peer in guard.iter() {
+            println!("{peer}")
+        }
+    }
+
     let client_peers = peers.clone();
     let server_peers = peers.clone();
 
-    let msg = env::args().nth(2);
-    let port = env::args().nth(2).unwrap_or("8080".to_string());
+    // let msg = env::args().nth(2);
+    let msg = Some("peers".to_string());
+    let port = env::args().nth(3).unwrap_or("8080".to_string());
 
     thread::spawn(move || {
         client::start(msg, client_peers).unwrap();
