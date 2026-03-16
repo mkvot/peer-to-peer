@@ -6,7 +6,7 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
-fn handle_client(mut stream: TcpStream) -> Result<()> {
+fn handle_client(mut stream: TcpStream, peers: Arc<Mutex<Vec<String>>>) -> Result<()> {
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf).unwrap();
 
@@ -21,7 +21,11 @@ fn handle_client(mut stream: TcpStream) -> Result<()> {
 
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/ping") => handle_ping(stream),
-        ("GET", "/peers") => handle_peers(stream),
+        ("GET", "/peers") => {
+            let peers = peers.lock().unwrap().clone();
+            let peers_json = serde_json::to_string(&peers)?;
+            handle_peers(stream, peers_json)
+        },
         _ => Ok(()),
     }
 }
@@ -32,7 +36,8 @@ pub fn start(port: String, peers: Arc<Mutex<Vec<String>>>) -> Result<()> {
     let listener = TcpListener::bind(addr)?;
 
     for stream in listener.incoming() {
-        handle_client(stream?)?;
+        let peers_ref = peers.clone();
+        handle_client(stream?, peers_ref)?;
     }
     Ok(())
 }

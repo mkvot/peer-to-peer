@@ -17,18 +17,21 @@ fn main() -> Result<()> {
         for peer in guard.iter() {
             println!("{peer}")
         }
+    } else {
+        let client_peers = peers.clone();
+
+        // let msg = env::args().nth(2);
+        let msg = Some("peers".to_string());
+
+        thread::spawn(move || {
+           client::start(msg, client_peers).unwrap();
+        });
     }
 
-    let client_peers = peers.clone();
+    // let client_peers = peers.clone();
     let server_peers = peers.clone();
 
-    // let msg = env::args().nth(2);
-    let msg = Some("peers".to_string());
-    let port = env::args().nth(3).unwrap_or("8080".to_string());
-
-    thread::spawn(move || {
-        client::start(msg, client_peers).unwrap();
-    });
+    let port = env::args().nth(2).unwrap_or("8080".to_string());
 
     server::start(port, server_peers)?;
     Ok(())
