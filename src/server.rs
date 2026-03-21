@@ -1,32 +1,29 @@
 use crate::http::parse_request;
-use crate::routes::{handle_peers, handle_ping};
+use crate::routes::{handle_addr, handle_not_found, handle_ping};
 use std::sync::{Arc, Mutex};
 use std::{
     io::{Read, Result},
     net::{TcpListener, TcpStream},
 };
 
-fn handle_client(mut stream: TcpStream, peers: Arc<Mutex<Vec<String>>>) -> Result<()> {
+fn handle_client(mut stream: TcpStream, state: Arc<Mutex<Vec<String>>>) -> Result<()> {
     let mut buf = [0u8; 4096];
-    let n = stream.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf)?;
 
-    println!(
-        "Received {} bytes from {}:",
-        n,
-        stream.local_addr().unwrap()
-    );
-    println!("{}", String::from_utf8_lossy(&buf[..n]));
+    // println!(
+    //     "Received {} bytes from {}:",
+    //     n,
+    //     stream.local_addr().unwrap()
+    // );
+    // println!("{}", String::from_utf8_lossy(&buf[..n]));
 
     let request = parse_request(&buf[..n]);
 
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/ping") => handle_ping(stream),
-        ("GET", "/peers") => {
-            let peers = peers.lock().unwrap().clone();
-            let peers_json = serde_json::to_string(&peers)?;
-            handle_peers(stream, peers_json)
-        },
-        _ => Ok(()),
+        ("GET", "/addr") => handle_addr(stream, state),
+        ("POST", "/peers/announce") => handle_addr(stream, state),
+        _ => handle_not_found(stream),
     }
 }
 
