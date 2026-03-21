@@ -28,11 +28,9 @@ fn main() -> Result<()> {
         });
     }
 
-    // let client_peers = peers.clone();
-    let server_peers = peers.clone();
-
+    let state = peers.clone();
     let port = env::args().nth(2).unwrap_or("8080".to_string());
 
-    server::start(port, server_peers)?;
+    server::start(port, state)?;
     Ok(())
 }

@@ -15,7 +15,7 @@ pub fn handle_addr(stream: TcpStream, state: Arc<Mutex<Vec<String>>>) -> Result<
 pub fn handle_announce(stream: TcpStream, state: Arc<Mutex<Vec<String>>>, peer: String) -> Result<()> {
     let mut peers = state.lock().unwrap().clone();
     let peers_json = serde_json::to_string(&peers)?;
-    reply(stream, peers_json);
+    reply(stream, peers_json)?;
     peers.push(peer);
     Ok(())
 }
