@@ -1,4 +1,6 @@
-use std::{io::Result, net::TcpStream, sync::{Arc, Mutex}};
+use std::{io::{Error, ErrorKind, Result}, net::TcpStream, sync::{Arc, Mutex}};
+
+use serde_json::Value;
 
 use crate::http::reply;
 
@@ -12,11 +14,15 @@ pub fn handle_addr(stream: TcpStream, state: Arc<Mutex<Vec<String>>>) -> Result<
     reply(stream, peers_json)
 }
 
-pub fn handle_announce(stream: TcpStream, state: Arc<Mutex<Vec<String>>>, peer: String) -> Result<()> {
-    let mut peers = state.lock().unwrap().clone();
+pub fn handle_announce(stream: TcpStream, state: Arc<Mutex<Vec<String>>>, peer_json: String) -> Result<()> {
+    let json: Value = serde_json::from_str(&peer_json)?;
+    let peer = json["address"].as_str().ok_or(Error::new(ErrorKind::InvalidData, "missing address"))?;
+
+    let peers = state.lock().unwrap().clone();
     let peers_json = serde_json::to_string(&peers)?;
     reply(stream, peers_json)?;
-    peers.push(peer);
+
+    state.lock().unwrap().push(peer.to_string());
     Ok(())
 }
 
