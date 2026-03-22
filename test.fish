@@ -31,8 +31,13 @@ sleep 0.3
 tmux send-keys -t p2p:0.2 './target/debug/peer-to-peer 8085 peers_bootstrap.json' Enter
 sleep 0.3
 
-echo ""
-echo "=== cleaning up temp files ==="
-
-echo "=== test complete, attaching to tmux ==="
 tmux attach -t p2p
+sleep 1
+
+# for testing blocks
+# curl -X POST http://127.0.0.1:8080/block \
+#   -H 'Content-Type: application/json' \
+#   -d '{"hash": "abc123", "content": "hello world"}'
+
+# curl http://127.0.0.1:8081/getblocks
+# curl http://127.0.0.1:8081/getdata/abc123

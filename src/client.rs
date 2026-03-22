@@ -101,6 +101,7 @@ fn announce(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
 fn sync_peers(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
     let mut stream = TcpStream::connect(addr)?;
     stream.write_all(format!("GET /addr HTTP/1.1\r\nHost: {addr}\r\n\r\n").as_bytes())?;
+
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf)?;
     let response = parse_response(&buf[..n]);
@@ -131,5 +132,18 @@ fn sync_peers(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+pub fn forward_block(addr: &str, body: &str) -> Result<()> {
+    let mut stream = TcpStream::connect(addr)?;
+    let request = format!(
+        "POST /block HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(), body
+    );
+    stream.write_all(request.as_bytes())?;
+    
+    let mut buf = [0u8; 4096];
+    stream.read(&mut buf)?;
     Ok(())
 }

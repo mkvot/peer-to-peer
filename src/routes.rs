@@ -2,10 +2,10 @@ use std::{io::{Error, ErrorKind, Result}, net::TcpStream, sync::{Arc, Mutex}};
 
 use serde_json::Value;
 
-use crate::{http::reply, state::NodeState};
+use crate::{client::forward_block, http::reply, state::NodeState};
 
 pub fn handle_ping(stream: TcpStream) -> Result<()> {
-    println!("ping from: {}", stream.peer_addr().unwrap());
+    // println!("ping from: {}", stream.peer_addr().unwrap());
     reply(stream, 200, r#"{"status": "ok"}"#.to_string())
 }
 
@@ -37,45 +37,55 @@ pub fn handle_not_found(stream: TcpStream) -> Result<()> {
     reply(stream, 404, "".to_string())
 }
 
-// pub fn handle_get_blocks(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
-//     let blocks = state.lock().unwrap().blocks.keys().cloned().collect::<Vec<String>>();
-//     let body = serde_json::to_string(&blocks)
-//         .map_err(|e| Error::new(ErrorKind::Other, e))?;
-//     reply(stream, 200, body)
-// }
+pub fn handle_get_blocks(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let blocks: Vec<String> = state.lock().unwrap().blocks.keys().cloned().collect();
+    let body = serde_json::to_string(&blocks)
+        .map_err(|e| Error::new(ErrorKind::Other, e))?;
+    reply(stream, 200, body)
+}
 
-// pub fn handle_get_data(stream: TcpStream, state: Arc<Mutex<NodeState>>, hash: &str) -> Result<()> {
-//     let blocks = state.lock().unwrap().blocks.clone();
-//     match blocks.get(hash) {
-//         Some(block) => reply(stream, 200, block.clone()),
-//         None => reply(stream, 404, r#"{"error": "block not found"}"#.to_string()),
-//     }
-// }
+pub fn handle_get_data(stream: TcpStream, state: Arc<Mutex<NodeState>>, hash: &str) -> Result<()> {
+    let blocks = state.lock().unwrap().blocks.clone();
+    match blocks.get(hash) {
+        Some(block) => reply(stream, 200, block.clone()),
+        None => reply(stream, 404, r#"{"error": "block not found"}"#.to_string()),
+    }
+}
 
-// pub fn handle_post_block(stream: TcpStream, state: Arc<Mutex<NodeState>>, body: String) -> Result<()> {
-//     let json: Value = serde_json::from_str(&body)
-//         .map_err(|e| Error::new(ErrorKind::Other, e))?;
+pub fn handle_post_block(stream: TcpStream, state: Arc<Mutex<NodeState>>, body: String) -> Result<()> {
+    let json: Value = serde_json::from_str(&body)
+        .map_err(|e| Error::new(ErrorKind::Other, e))?;
     
-//     let hash = json["hash"].as_str()
-//         .ok_or(Error::new(ErrorKind::InvalidData, "missing hash"))?;
-//     let content = json["content"].as_str()
-//         .ok_or(Error::new(ErrorKind::InvalidData, "missing content"))?;
+    let hash = json["hash"].as_str()
+        .ok_or(Error::new(ErrorKind::InvalidData, "missing hash"))?;
+    let content = json["content"].as_str()
+        .ok_or(Error::new(ErrorKind::InvalidData, "missing content"))?;
 
-//     let already_have = state.lock().unwrap().blocks.contains_key(hash);
-//     if already_have {
-//         return reply(stream, 200, r#"{"status": "already have it"}"#.to_string());
-//     }
+    let already_have = state.lock().unwrap().blocks.contains_key(hash);
+    if already_have {
+        return reply(stream, 200, r#"{"status": "already have it"}"#.to_string());
+    }
 
-//     state.lock().unwrap().blocks.insert(hash.to_string(), content.to_string());
-//     println!("Stored block {hash}");
+    state.lock().unwrap().blocks.insert(hash.to_string(), content.to_string());
+    println!("Stored block {hash}");
 
-//     // forward to peers
-//     let peers = state.lock().unwrap().peers.clone();
-//     for peer in peers.iter() {
-//         if let Err(e) = forward_block(peer, &body) {
-//             println!("failed to forward block to {peer}: {e}");
-//         }
-//     }
+    let peers = state.lock().unwrap().peers.clone();
+    for peer in peers.iter() {
+        if let Err(e) = forward_block(peer, &body) {
+            println!("failed to forward block to {peer}: {e}");
+        }
+    }
 
-//     reply(stream, 200, r#"{"status": "ok"}"#.to_string())
-// }
+    Ok(())
+}
+
+pub fn handle_get_blocks_from(stream: TcpStream, state: Arc<Mutex<NodeState>>, from_hash: &str) -> Result<()> {
+    let blocks = state.lock().unwrap().blocks.clone();
+    let keys: Vec<String> = blocks.keys()
+        .skip_while(|k| k.as_str() != from_hash)
+        .cloned()
+        .collect();
+    let body = serde_json::to_string(&keys)
+        .map_err(|e| Error::new(ErrorKind::Other, e))?;
+    reply(stream, 200, body)
+}

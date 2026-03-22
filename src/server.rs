@@ -1,5 +1,5 @@
 use crate::http::{parse_request};
-use crate::routes::{handle_addr, handle_not_found, handle_ping, handle_announce};
+use crate::routes::{handle_addr, handle_announce, handle_get_blocks, handle_get_blocks_from, handle_get_data, handle_not_found, handle_ping, handle_post_block};
 use crate::state::NodeState;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -18,6 +18,16 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<
         ("GET", "/ping") => handle_ping(stream),
         ("GET", "/addr") => handle_addr(stream, state),
         ("POST", "/peers/announce") => handle_announce(stream, state, request.body),
+        ("GET", "/getblocks") => handle_get_blocks(stream, state),
+        ("GET", path) if path.starts_with("/getdata/") => {
+            let hash = path.trim_start_matches("/getdata/");
+            handle_get_data(stream, state, hash)
+        },
+        ("POST", "/block") => handle_post_block(stream, state, request.body),
+        ("GET", path) if path.starts_with("/getblocks/") => {
+            let hash = path.trim_start_matches("/getblocks/");
+            handle_get_blocks_from(stream, state, hash)
+        },
         _ => handle_not_found(stream),
     }
 }
