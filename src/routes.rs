@@ -10,20 +10,71 @@ pub fn handle_ping(stream: TcpStream) -> Result<()> {
 
 pub fn handle_addr(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
     let peers = state.lock().unwrap().clone().peers;
-    let peers_json = serde_json::to_string(&peers)?;
+    let peers_json = serde_json::to_string(&peers)
+    .map_err(|e| Error::new(ErrorKind::Other, e))?;
     reply(stream, 200, peers_json)
 }
 
 pub fn handle_announce(stream: TcpStream, state: Arc<Mutex<NodeState>>, peer_json: String) -> Result<()> {
     let json: Value = serde_json::from_str(&peer_json)?;
-    let peer = json["address"].as_str().ok_or(Error::new(ErrorKind::InvalidData, "missing address"))?;
-    state.lock().unwrap().peers.push(peer.to_string());
+    let peer = json["address"].as_str()
+        .ok_or(Error::new(ErrorKind::InvalidData, "missing address"))?;
 
-    let peers = state.lock().unwrap().clone().peers;
-    let peers_json = serde_json::to_string(&peers)?;
-    reply(stream, 200,peers_json)
+    let peers_json = {
+        let mut node = state.lock().unwrap();
+        if peer != node.addr && !node.peers.contains(&peer.to_string()) {
+            node.peers.push(peer.to_string());
+        }
+        serde_json::to_string(&node.peers)
+            .map_err(|e| Error::new(ErrorKind::Other, e))?
+    };
+
+    reply(stream, 200, peers_json)
 }
 
 pub fn handle_not_found(stream: TcpStream) -> Result<()> {
     reply(stream, 404, "".to_string())
 }
+
+// pub fn handle_get_blocks(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+//     let blocks = state.lock().unwrap().blocks.keys().cloned().collect::<Vec<String>>();
+//     let body = serde_json::to_string(&blocks)
+//         .map_err(|e| Error::new(ErrorKind::Other, e))?;
+//     reply(stream, 200, body)
+// }
+
+// pub fn handle_get_data(stream: TcpStream, state: Arc<Mutex<NodeState>>, hash: &str) -> Result<()> {
+//     let blocks = state.lock().unwrap().blocks.clone();
+//     match blocks.get(hash) {
+//         Some(block) => reply(stream, 200, block.clone()),
+//         None => reply(stream, 404, r#"{"error": "block not found"}"#.to_string()),
+//     }
+// }
+
+// pub fn handle_post_block(stream: TcpStream, state: Arc<Mutex<NodeState>>, body: String) -> Result<()> {
+//     let json: Value = serde_json::from_str(&body)
+//         .map_err(|e| Error::new(ErrorKind::Other, e))?;
+    
+//     let hash = json["hash"].as_str()
+//         .ok_or(Error::new(ErrorKind::InvalidData, "missing hash"))?;
+//     let content = json["content"].as_str()
+//         .ok_or(Error::new(ErrorKind::InvalidData, "missing content"))?;
+
+//     let already_have = state.lock().unwrap().blocks.contains_key(hash);
+//     if already_have {
+//         return reply(stream, 200, r#"{"status": "already have it"}"#.to_string());
+//     }
+
+//     state.lock().unwrap().blocks.insert(hash.to_string(), content.to_string());
+//     println!("Stored block {hash}");
+
+//     // forward to peers
+//     let peers = state.lock().unwrap().peers.clone();
+//     for peer in peers.iter() {
+//         if let Err(e) = forward_block(peer, &body) {
+//             println!("failed to forward block to {peer}: {e}");
+//         }
+//     }
+
+//     reply(stream, 200, r#"{"status": "ok"}"#.to_string())
+// }

@@ -13,11 +13,9 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<
     let n = stream.read(&mut buf)?;
 
     println!(
-        "Received {} bytes from {}:",
-        n,
-        stream.local_addr().unwrap()
+        "Received from {}:",
+        stream.peer_addr().unwrap()
     );
-    println!("{}", String::from_utf8_lossy(&buf[..n]));
 
     let request = parse_request(&buf[..n]);
 
@@ -29,15 +27,14 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<
     }
 }
 
-pub fn start(port: String, peers: Arc<Mutex<NodeState>>) -> Result<()> {
-    let ip = "127.0.0.1";
-    let addr = format!("{ip}:{port}");
+pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let addr = state.lock().unwrap().addr.clone();
     let listener = TcpListener::bind(addr)?;
 
     for stream in listener.incoming() {
-        let state = peers.clone();
+        let node = state.clone();
         thread::spawn(move || {
-            if let Err(e) = handle_client(stream.unwrap(), state) {
+            if let Err(e) = handle_client(stream.unwrap(), node) {
                 println!("Error handling client: {}", e);
             }
         });

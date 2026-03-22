@@ -15,26 +15,26 @@ fn main() -> Result<()> {
         return Ok(());
     };
 
-    let state: Arc<Mutex<NodeState>> = Arc::new(Mutex::new(NodeState::new()));
+    let addr = format!("127.0.0.1:{port}");
+    let state: Arc<Mutex<NodeState>> = Arc::new(Mutex::new(NodeState::new(addr)));
 
     if let Some(path) = env::args().nth(2) {
         let json = fs::read_to_string(path).unwrap();
         let peer_info: Vec<String> = serde_json::from_str(&json).expect("failed to parse json");
-        let mut guard = state.lock().unwrap();
-        guard.peers = peer_info;
+        let mut state = state.lock().unwrap();
+        state.peers = peer_info;
         println!("Loaded peers from file:");
-        for peer in guard.peers.iter() {
+        for peer in state.peers.iter() {
             println!("  {peer}");
         }
     }
 
-    let my_addr = format!("127.0.0.1:{port}");
-
     let client_state = state.clone();
     thread::spawn(move || {
-        client::start(client_state, &my_addr).unwrap();
+        client::start(client_state).unwrap();
     });
 
-    server::start(port, state)?;
+    let server_state = state.clone();
+    server::start(server_state)?;
     Ok(())
 }

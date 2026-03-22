@@ -5,19 +5,19 @@ use std::{
 
 use crate::{http::parse_response, state::NodeState};
 
-pub fn start(state: Arc<Mutex<NodeState>>, my_addr: &str) -> Result<()> {
+pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
     let node = state.lock().unwrap().clone();
-    let peers = node.peers;
+    let addr = node.addr.clone();
+    let peers = node.peers.clone();
+
     if peers.is_empty() {
-        println!("No peers, waiting for incoming connections");
+        println!("waiting for connections");
     } else {
         for peer in peers.iter() {
-            if peer == my_addr {
-                continue;
-            }
+            if peer == &node.addr { continue };
             match ping(peer) {
                 Ok(_) => {
-                    announce(peer, my_addr, &state)?;
+                    announce(peer, &state)?;
                 },
                 Err(e) => println!("failed to reach {peer}, {e}"),
             }
@@ -25,15 +25,20 @@ pub fn start(state: Arc<Mutex<NodeState>>, my_addr: &str) -> Result<()> {
     }
 
     loop {
-        println!("Waiting 5s");
+        println!("~~~");
         thread::sleep(Duration::from_secs(5));
 
-        let peers = peers.clone();
-        let dead: Vec<String> = peers.iter()
-            .filter(|p| ping(p).is_err())
-            .cloned()
-            .collect();
-        state.lock().unwrap().peers.retain(|p| !dead.contains(p));
+        let peers = state.lock().unwrap().peers.clone();
+        for peer in peers.iter() {
+            if peer == &addr { continue; }
+            match ping(peer) {
+                Ok(_) => { announce(peer, &state)?; }
+                Err(_) => {
+                    println!("peer {peer} is dead, removing");
+                    state.lock().unwrap().peers.retain(|p| p != peer);
+                }
+            }
+        }
     }
 }
 
@@ -51,8 +56,10 @@ fn ping(addr: &str) -> Result<()> {
     }
 }
 
-fn announce(addr: &str, my_addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+fn announce(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+    println!("announcing to {addr}");
     let mut stream = TcpStream::connect(addr)?;
+    let my_addr = state.lock().unwrap().addr.clone();
     let body = format!(r#"{{"address": "{}"}}"#, my_addr);
     let request = format!(
         "POST /peers/announce HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\n\r\n{}",
@@ -78,6 +85,9 @@ fn announce(addr: &str, my_addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<
             guard.peers.push(peer.to_string());
         }
     }
+
+    println!("announce response status: {}", response.status);
+    println!("announce response body: {}", response.body);
 
     Ok(())
 }
