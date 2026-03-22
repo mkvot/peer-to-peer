@@ -1,5 +1,6 @@
 use crate::http::{parse_request};
 use crate::routes::{handle_addr, handle_not_found, handle_ping, handle_announce};
+use crate::state::NodeState;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::{
@@ -7,7 +8,7 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
-fn handle_client(mut stream: TcpStream, state: Arc<Mutex<Vec<String>>>) -> Result<()> {
+fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf)?;
 
@@ -28,7 +29,7 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<Vec<String>>>) -> Resul
     }
 }
 
-pub fn start(port: String, peers: Arc<Mutex<Vec<String>>>) -> Result<()> {
+pub fn start(port: String, peers: Arc<Mutex<NodeState>>) -> Result<()> {
     let ip = "127.0.0.1";
     let addr = format!("{ip}:{port}");
     let listener = TcpListener::bind(addr)?;

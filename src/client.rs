@@ -3,15 +3,16 @@ use std::{
     net::TcpStream, sync::{Arc, Mutex}, thread, time::Duration,
 };
 
-use crate::http::parse_response;
+use crate::{http::parse_response, state::NodeState};
 
-pub fn start(state: Arc<Mutex<Vec<String>>>, my_addr: &str) -> Result<()> {
-    let peers = state.lock().unwrap().clone();
+pub fn start(state: Arc<Mutex<NodeState>>, my_addr: &str) -> Result<()> {
+    let node = state.lock().unwrap().clone();
+    let peers = node.peers;
     if peers.is_empty() {
         println!("No peers, waiting for incoming connections");
     } else {
         for peer in peers.iter() {
-            if peer == &my_addr {
+            if peer == my_addr {
                 continue;
             }
             match ping(peer) {
@@ -27,13 +28,12 @@ pub fn start(state: Arc<Mutex<Vec<String>>>, my_addr: &str) -> Result<()> {
         println!("Waiting 5s");
         thread::sleep(Duration::from_secs(5));
 
-        let peers = state.lock().unwrap().clone();
-        for peer in peers.iter() {
-            match ping(peer) {
-                Ok(_) => {},
-                Err(_) => state.lock().unwrap().retain(|p| p != peer),
-            }
-        }
+        let peers = peers.clone();
+        let dead: Vec<String> = peers.iter()
+            .filter(|p| ping(p).is_err())
+            .cloned()
+            .collect();
+        state.lock().unwrap().peers.retain(|p| !dead.contains(p));
     }
 }
 
@@ -51,7 +51,7 @@ fn ping(addr: &str) -> Result<()> {
     }
 }
 
-fn announce(addr: &str, my_addr: &str, state: &Arc<Mutex<Vec<String>>>) -> Result<()> {
+fn announce(addr: &str, my_addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
     let mut stream = TcpStream::connect(addr)?;
     let body = format!(r#"{{"address": "{}"}}"#, my_addr);
     let request = format!(
@@ -71,11 +71,11 @@ fn announce(addr: &str, my_addr: &str, state: &Arc<Mutex<Vec<String>>>) -> Resul
         _ => {},
     }
 
-    let peers: Vec<String> = serde_json::from_str(&response.body)?;
+    let new_peers: Vec<String> = serde_json::from_str(&response.body)?;
     let mut guard = state.lock().unwrap();
-    for peer in peers.iter() {
-        if peer != &my_addr && !guard.contains(peer) {
-            guard.push(peer.to_string());
+    for peer in new_peers.iter() {
+        if peer != &my_addr && !guard.peers.contains(peer) {
+            guard.peers.push(peer.to_string());
         }
     }
 
