@@ -55,13 +55,17 @@ pub fn parse_response(buf: &[u8]) -> Response {
     }
 }
 
-pub fn reply(mut stream: TcpStream, body: String) -> Result<()> {
+pub fn reply(mut stream: TcpStream, status: u16, body: String) -> Result<()> {
+    let status_text = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "OK",
+    };
+
     let response = format!(
-        "HTTP/1.1 200 OK\r\n\
-    Content-Type: application/json\r\n\
-    Content-Length: {}\r\n\
-    \r\n\
-    {}",
+        "HTTP/1.1 {status} {status_text}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
         body.len(),
         body
     );
