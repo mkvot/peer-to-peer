@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::{http::reply, state::NodeState};
 
 pub fn handle_ping(stream: TcpStream) -> Result<()> {
+    println!("ping from: {}", stream.peer_addr().unwrap());
     reply(stream, 200, r#"{"status": "ok"}"#.to_string())
 }
 
@@ -16,6 +17,7 @@ pub fn handle_addr(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()
 }
 
 pub fn handle_announce(stream: TcpStream, state: Arc<Mutex<NodeState>>, peer_json: String) -> Result<()> {
+    println!("anno: {}", stream.peer_addr().unwrap());
     let json: Value = serde_json::from_str(&peer_json)?;
     let peer = json["address"].as_str()
         .ok_or(Error::new(ErrorKind::InvalidData, "missing address"))?;
@@ -28,7 +30,6 @@ pub fn handle_announce(stream: TcpStream, state: Arc<Mutex<NodeState>>, peer_jso
         serde_json::to_string(&node.peers)
             .map_err(|e| Error::new(ErrorKind::Other, e))?
     };
-
     reply(stream, 200, peers_json)
 }
 

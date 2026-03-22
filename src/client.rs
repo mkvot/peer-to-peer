@@ -24,17 +24,27 @@ pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
         }
     }
 
+    let mut tick = 0u32;
+
     loop {
+        thread::sleep(Duration::from_secs(3));
         println!("~~~");
-        thread::sleep(Duration::from_secs(5));
+        tick += 1;
 
         let peers = state.lock().unwrap().peers.clone();
+        println!("~~~ known peers: {:?}", peers);
         for peer in peers.iter() {
             if peer == &addr { continue; }
             match ping(peer) {
-                Ok(_) => { announce(peer, &state)?; }
+                Ok(_) => {
+                    if tick % 3 == 0 {
+                        if let Err(e) = sync_peers(peer, &state) {
+                            println!("failed to sync peers with {peer}: {e}");
+                        }
+                    }
+                }
                 Err(_) => {
-                    println!("peer {peer} is dead, removing");
+                    println!("{peer} is dead, removing");
                     state.lock().unwrap().peers.retain(|p| p != peer);
                 }
             }
@@ -57,7 +67,6 @@ fn ping(addr: &str) -> Result<()> {
 }
 
 fn announce(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
-    println!("announcing to {addr}");
     let mut stream = TcpStream::connect(addr)?;
     let my_addr = state.lock().unwrap().addr.clone();
     let body = format!(r#"{{"address": "{}"}}"#, my_addr);
@@ -86,8 +95,41 @@ fn announce(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
         }
     }
 
-    println!("announce response status: {}", response.status);
-    println!("announce response body: {}", response.body);
+    Ok(())
+}
+
+fn sync_peers(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+    let mut stream = TcpStream::connect(addr)?;
+    stream.write_all(format!("GET /addr HTTP/1.1\r\nHost: {addr}\r\n\r\n").as_bytes())?;
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf)?;
+    let response = parse_response(&buf[..n]);
+    
+    let new_peers: Vec<String> = match serde_json::from_str(&response.body) {
+        Ok(p) => p,
+        Err(e) => {
+            println!("failed to parse peers from {addr}: {e}, body: {}", response.body);
+            return Ok(());
+        }
+    };
+
+    let mut newly_discovered = vec![];
+    {
+        let mut guard = state.lock().unwrap();
+        for peer in new_peers {
+            if peer != guard.addr && !guard.peers.contains(&peer) {
+                println!("discovered new peer {peer}");
+                guard.peers.push(peer.clone());
+                newly_discovered.push(peer);
+            }
+        }
+    }
+
+    for peer in newly_discovered {
+        if let Err(e) = announce(&peer, state) {
+            println!("failed to announce to new peer {peer}: {e}");
+        }
+    }
 
     Ok(())
 }

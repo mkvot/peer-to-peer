@@ -12,11 +12,6 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf)?;
 
-    println!(
-        "Received from {}:",
-        stream.peer_addr().unwrap()
-    );
-
     let request = parse_request(&buf[..n]);
 
     match (request.method.as_str(), request.path.as_str()) {
