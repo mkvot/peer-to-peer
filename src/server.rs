@@ -11,12 +11,12 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<Vec<String>>>) -> Resul
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf)?;
 
-    // println!(
-    //     "Received {} bytes from {}:",
-    //     n,
-    //     stream.local_addr().unwrap()
-    // );
-    // println!("{}", String::from_utf8_lossy(&buf[..n]));
+    println!(
+        "Received {} bytes from {}:",
+        n,
+        stream.local_addr().unwrap()
+    );
+    println!("{}", String::from_utf8_lossy(&buf[..n]));
 
     let request = parse_request(&buf[..n]);
 

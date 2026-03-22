@@ -17,13 +17,11 @@ pub fn handle_addr(stream: TcpStream, state: Arc<Mutex<Vec<String>>>) -> Result<
 pub fn handle_announce(stream: TcpStream, state: Arc<Mutex<Vec<String>>>, peer_json: String) -> Result<()> {
     let json: Value = serde_json::from_str(&peer_json)?;
     let peer = json["address"].as_str().ok_or(Error::new(ErrorKind::InvalidData, "missing address"))?;
+    state.lock().unwrap().push(peer.to_string());
 
     let peers = state.lock().unwrap().clone();
     let peers_json = serde_json::to_string(&peers)?;
-    reply(stream, peers_json)?;
-
-    state.lock().unwrap().push(peer.to_string());
-    Ok(())
+    reply(stream, peers_json)
 }
 
 pub fn handle_not_found(stream: TcpStream) -> Result<()> {

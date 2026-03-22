@@ -27,11 +27,11 @@ fn main() -> Result<()> {
     }
 
     let client_state = peers.clone();
-
     let state = peers.clone();
+    let my_addr = format!("127.0.0.1:{port}");
 
     thread::spawn(move || {
-        client::start(client_state).unwrap();
+        client::start(client_state, &my_addr).unwrap();
     });
 
     server::start(port, state)?;
