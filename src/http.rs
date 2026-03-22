@@ -10,6 +10,12 @@ pub struct Request {
     pub body: String,
 }
 
+pub struct Response {
+    pub status: u16,
+    pub headers: Vec<String>,
+    pub body: String,
+}
+
 pub fn parse_request(buf: &[u8]) -> Request {
     let request = String::from_utf8_lossy(&buf);
     let (head, body) = request.split_once("\r\n\r\n").unwrap_or(("", ""));
@@ -23,6 +29,27 @@ pub fn parse_request(buf: &[u8]) -> Request {
     Request {
         method,
         path,
+        headers,
+        body: body.to_string(),
+    }
+}
+
+pub fn parse_response(buf: &[u8]) -> Response {
+    let request = String::from_utf8_lossy(&buf);
+    let (head, body) = request.split_once("\r\n\r\n").unwrap_or(("", ""));
+
+    let mut lines = head.split("\r\n");
+    
+    let status = lines.next().unwrap_or("")
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let headers: Vec<String> = lines.map(|x| x.to_string()).collect();
+
+    Response {
+        status,
         headers,
         body: body.to_string(),
     }

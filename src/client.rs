@@ -1,45 +1,76 @@
 use std::{
-    io::{Read, Result, Write},
-    net::TcpStream, sync::{Arc, Mutex},
+    io::{Error, ErrorKind, Read, Result, Write},
+    net::TcpStream, sync::{Arc, Mutex}, thread, time::Duration,
 };
 
-use crate::http::parse_request;
+use crate::http::parse_response;
 
-pub fn start(msg: Option<String>, peers: Arc<Mutex<Vec<String>>>) -> Result<()> {
-    let addr = "127.0.0.1:8080";
+pub fn start(state: Arc<Mutex<Vec<String>>>) -> Result<()> {
+    let peers = state.lock().unwrap().clone();
+    if peers.is_empty() {
+        println!("No peers, waiting for incoming connections");
+    } else {
+        for peer in peers.iter() {
+            match ping(peer) {
+                Ok(_) => {
+                    announce(peer, "127.0.0.1", &state)?;
+                },
+                Err(e) => println!("failed to reach {peer}, {e}"),
+            }
+        }
+    }
+
+    loop {
+        thread::sleep(Duration::from_secs(5));
+        let peers = state.lock().unwrap().clone();
+        for peer in peers.iter() {
+            match ping(peer) {
+                Ok(_) => announce(peer, "127.0.0.1", &state)?,
+                Err(_) => state.lock().unwrap().retain(|p| p != peer),
+            }
+        }
+    }
+}
+
+fn ping(addr: &str) -> Result<()> {
     let mut stream = TcpStream::connect(addr)?;
-        
-    let request = match msg.as_deref() {
-        Some("peers") => "GET /peers HTTP/1.1\r\nHost:127.0.0.1:8082\r\n\r\n".to_string(),
-        Some("ping") | None => "GET /ping HTTP/1.1\r\nHost:127.0.0.1:8082\r\n\r\n".to_string(),
-        Some(msg) => msg.to_string(),
-    };
+    stream.write_all("GET /ping HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".as_bytes())?;
+    let mut buf = [0u8; 512];
+    let n = stream.read(&mut buf)?;
 
+    let response = parse_response(&buf[..n]);
+    
+    match response.status {
+        200 => Ok(()),
+        _ => Err(Error::new(ErrorKind::Other, format!("failed to ping {addr}"))),
+    }
+}
+
+fn announce(addr: &str, my_addr: &str, state: &Arc<Mutex<Vec<String>>>) -> Result<()> {
+    let mut stream = TcpStream::connect(addr)?;
+    let body = format!(r#"{{"address": "{}"}}"#, my_addr);
+    let request = format!(
+        "POST /peers/announce HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(), body
+    );
     stream.write_all(request.as_bytes())?;
 
+
     let mut buf = [0u8; 512];
-    let n = stream.read(&mut buf).unwrap();
-    println!(
-        "Received {n} bytes:\n {}",
-        String::from_utf8_lossy(&buf[..n])
-    );
+    let n = stream.read(&mut buf)?;
 
-    let body = parse_request(&buf[..n]).body;
-    let mut json: Vec<String> = serde_json::from_str(&body).unwrap();
-
-
-    println!("received peers:");
-    for peer in json.iter() {
-        println!("{peer}");
-    }
-
-    let mut guard = peers.lock().unwrap();
-    guard.append(&mut json);
-
-    println!("known peers:");
-    for peer in guard.iter() {
-        println!("{peer}");
-    }
+    let response = parse_response(&buf[..n]);
     
+    match response.status {
+        200 => {},
+        _ => {},
+    }
+
+    let peers: Vec<String> = serde_json::from_str(&response.body)?;
+    let mut guard = state.lock().unwrap();
+    for peer in peers.iter() {
+        guard.push(peer.to_string());
+    }
+
     Ok(())
 }

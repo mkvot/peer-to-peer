@@ -1,4 +1,4 @@
-use crate::http::parse_request;
+use crate::http::{parse_request};
 use crate::routes::{handle_addr, handle_not_found, handle_ping, handle_announce};
 use std::sync::{Arc, Mutex};
 use std::thread;

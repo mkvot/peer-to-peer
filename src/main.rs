@@ -5,9 +5,16 @@ mod server;
 use std::{env, fs, io::Result, sync::{Arc, Mutex}, thread};
 
 fn main() -> Result<()> {
+    let port = if let Some(port) = env::args().nth(1) {
+        port
+    } else {
+        println!("Usage: ./app <port> [peers.json]");
+        return Ok(());
+    };
+
     let peers: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
-    if let Some(path) = env::args().nth(1) {
+    if let Some(path) = env::args().nth(2) {
         let json = fs::read_to_string(path).unwrap();
         let peer_info: Vec<String> = serde_json::from_str(&json).expect("failed to parse json");
         let mut guard = peers.lock().unwrap();
@@ -17,19 +24,15 @@ fn main() -> Result<()> {
         for peer in guard.iter() {
             println!("{peer}")
         }
-    } else {
-        let client_peers = peers.clone();
-
-        // let msg = env::args().nth(2);
-        let msg = Some("peers".to_string());
-
-        thread::spawn(move || {
-           client::start(msg, client_peers).unwrap();
-        });
     }
 
+    let client_state = peers.clone();
+
     let state = peers.clone();
-    let port = env::args().nth(2).unwrap_or("8080".to_string());
+
+    thread::spawn(move || {
+        client::start(client_state).unwrap();
+    });
 
     server::start(port, state)?;
     Ok(())
