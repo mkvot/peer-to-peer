@@ -3,6 +3,7 @@ mod http;
 mod routes;
 mod server;
 mod state;
+mod crypto;
 
 use std::{env, fs, io::Result, sync::{Arc, Mutex}, thread};
 use crate::state::NodeState;
@@ -23,7 +24,6 @@ fn main() -> Result<()> {
         let peer_info: Vec<String> = serde_json::from_str(&json).expect("failed to parse json");
         let mut state = state.lock().unwrap();
         state.peers = peer_info;
-        println!("Loaded peers from file:");
         for peer in state.peers.iter() {
             println!("  {peer}");
         }

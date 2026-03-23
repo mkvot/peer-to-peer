@@ -9,7 +9,6 @@ use std::{
 };
 
 fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf)?;
 
