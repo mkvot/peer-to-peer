@@ -3,7 +3,7 @@ use std::{
     net::TcpStream, sync::{Arc, Mutex}, thread, time::Duration,
 };
 
-use crate::{http::parse_response, state::NodeState};
+use crate::{http::{Request, Response, parse_response}, state::NodeState};
 
 pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
     let node = state.lock().unwrap().clone();
@@ -58,15 +58,37 @@ pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
     }
 }
 
-fn ping(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+fn send_request(addr: &str, request: Request) -> Result<Response> {
     let mut stream = TcpStream::connect(addr)?;
-    let my_addr = state.lock().unwrap().addr.clone();
-    let request = format!("GET /ping HTTP/1.1\r\nHost: {addr}\r\nX-Node-Addr: {my_addr}\r\n\r\n").to_string();
-    stream.write_all(request.as_bytes())?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+
+    let headers = if request.headers.is_empty() {
+        String::new()
+    } else {
+        format!("{}\r\n", request.headers.join("\r\n"))
+    };
+
+    let msg = format!(
+        "{} {} {}\r\n{}\r\n\r\n{}",
+        request.method, 
+        request.path, 
+        request.version, 
+        headers, 
+        request.body
+    );
+
+    stream.write_all(msg.as_bytes())?;
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf)?;
 
-    let response = parse_response(&buf[..n]);
+    Ok(parse_response(&buf[..n]))
+}
+
+fn ping(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+    let my_addr = state.lock().unwrap().addr.clone();
+
+    let request = Request::get("/ping", &my_addr, addr);
+    let response = send_request(addr, request)?;
     
     match response.status {
         200 => Ok(()),
@@ -75,28 +97,15 @@ fn ping(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
 }
 
 fn announce(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
-    let mut stream = TcpStream::connect(addr)?;
     let my_addr = state.lock().unwrap().addr.clone();
     let body = format!(r#"{{"address": "{}"}}"#, my_addr);
-    let request = format!(
-        "POST /peers/announce HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(), body
-    );
-    stream.write_all(request.as_bytes())?;
 
-
-    let mut buf = [0u8; 4096];
-    let n = stream.read(&mut buf)?;
-
-    let response = parse_response(&buf[..n]);
+    let request = Request::post("/peers/announce", &my_addr, addr, body);
+    let response = send_request(addr, request)?;
     
-    match response.status {
-        200 => {},
-        _ => {},
-    }
-
     let new_peers: Vec<String> = serde_json::from_str(&response.body)?;
     let mut guard = state.lock().unwrap();
+
     for peer in new_peers.iter() {
         if peer != &my_addr && !guard.peers.contains(peer) {
             guard.peers.push(peer.to_string());
@@ -107,12 +116,10 @@ fn announce(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
 }
 
 fn sync_peers(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
-    let mut stream = TcpStream::connect(addr)?;
-    stream.write_all(format!("GET /addr HTTP/1.1\r\nHost: {addr}\r\n\r\n").as_bytes())?;
+    let my_addr = state.lock().unwrap().addr.clone();
 
-    let mut buf = [0u8; 4096];
-    let n = stream.read(&mut buf)?;
-    let response = parse_response(&buf[..n]);
+    let request = Request::get("/addr", &my_addr, addr);
+    let response = send_request(addr, request)?;
     
     let new_peers: Vec<String> = match serde_json::from_str(&response.body) {
         Ok(p) => p,
@@ -143,28 +150,36 @@ fn sync_peers(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
     Ok(())
 }
 
-pub fn forward_block(addr: &str, body: &str) -> Result<()> {
-    let mut stream = TcpStream::connect(addr)?;
-    let request = format!(
-        "POST /block HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(), body
-    );
-    stream.write_all(request.as_bytes())?;
+pub fn forward_block(addr: &str, body: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+    let my_addr = state.lock().unwrap().addr.clone();
+
+    let request = Request::post("/block", &my_addr, addr, body.to_string());
     
-    let mut buf = [0u8; 4096];
-    stream.read(&mut buf)?;
-    Ok(())
+    match send_request(addr, request) {
+        Ok(response) => {
+            if response.status == 200 {
+                println!("Successfully forwarded block to {}", addr);
+                Ok(())
+            } else {
+                println!("Node {} returned error: {}", addr, response.status);
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Node rejected block with status {}", response.status)
+                ))
+            }
+        }
+        Err(e) => {
+            println!("Failed to reach node {}: {}", addr, e);
+            Err(e) 
+        }
+    }
 }
 
 fn sync_blocks(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
-    let mut stream = TcpStream::connect(addr)?;
     let my_addr = state.lock().unwrap().addr.clone();
-    let request = format!("GET /getblocks HTTP/1.1\r\nHost: {addr}\r\nX-Node-Addr: {my_addr}\r\n\r\n").to_string();
-    stream.write_all(request.as_bytes())?;
 
-    let mut buf = [0u8; 4096];
-    let n = stream.read(&mut buf)?;
-    let response = parse_response(&buf[..n]);
+    let request = Request::get("/getblocks", &my_addr, addr);
+    let response = send_request(addr, request)?;
 
     let hashes: Vec<String> = match serde_json::from_str(&response.body) {
         Ok(h) => h,
@@ -181,13 +196,11 @@ fn sync_blocks(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
 }
 
 fn get_block(addr:&str, state: &Arc<Mutex<NodeState>>, hash: String) -> Result<()>{
-    let mut stream = TcpStream::connect(addr)?;
-    stream.write_all(format!("GET /getdata/{hash} HTTP/1.1\r\nHost: {addr}\r\n\r\n").as_bytes())?;
+    let my_addr = state.lock().unwrap().addr.clone();
 
-    let mut buf = [0u8; 4096];
-    let n = stream.read(&mut buf)?;
+    let request = Request::get(&format!("/getdata/{hash}"), &my_addr, addr);
+    let response = send_request(addr, request)?;
 
-    let response = parse_response(&buf[..n]);
     if response.status == 200 {
         println!("synced block {hash} from {addr}");
         state.lock().unwrap().blocks.insert(hash, response.body);

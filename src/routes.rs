@@ -74,7 +74,7 @@ pub fn handle_post_block(stream: TcpStream, state: Arc<Mutex<NodeState>>, body: 
 
     let peers = state.lock().unwrap().peers.clone();
     for peer in peers.iter() {
-        if let Err(e) = forward_block(peer, &body) {
+        if let Err(e) = forward_block(peer, &body, &state) {
             println!("failed to forward block to {peer}: {e}");
         }
     }
