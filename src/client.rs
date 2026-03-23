@@ -24,6 +24,12 @@ pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
         }
     }
 
+    for peer in state.lock().unwrap().peers.clone().iter() {
+        if let Err(e) = sync_blocks(peer, &state) {
+            println!("failed to sync blocks from {peer}: {e}");
+        }
+    }
+
     let mut tick = 0u32;
 
     loop {
@@ -148,4 +154,46 @@ pub fn forward_block(addr: &str, body: &str) -> Result<()> {
     let mut buf = [0u8; 4096];
     stream.read(&mut buf)?;
     Ok(())
+}
+
+fn sync_blocks(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+    let mut stream = TcpStream::connect(addr)?;
+    let my_addr = state.lock().unwrap().addr.clone();
+    let request = format!("GET /getblocks HTTP/1.1\r\nHost: {addr}\r\nX-Node-Addr: {my_addr}\r\n\r\n").to_string();
+    stream.write_all(request.as_bytes())?;
+
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf)?;
+    let response = parse_response(&buf[..n]);
+
+    let hashes: Vec<String> = match serde_json::from_str(&response.body) {
+        Ok(h) => h,
+        Err(_) => return Ok(()),
+    };
+
+    for hash in hashes {
+        if state.lock().unwrap().blocks.contains_key(&hash) {
+            continue;
+        }
+        get_block(addr, state, hash)?;
+    }
+    Ok(())
+}
+
+fn get_block(addr:&str, state: &Arc<Mutex<NodeState>>, hash: String) -> Result<()>{
+    let mut stream = TcpStream::connect(addr)?;
+    stream.write_all(format!("GET /getdata/{hash} HTTP/1.1\r\nHost: {addr}\r\n\r\n").as_bytes())?;
+
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf)?;
+
+    let response = parse_response(&buf[..n]);
+    if response.status == 200 {
+        println!("synced block {hash} from {addr}");
+        state.lock().unwrap().blocks.insert(hash, response.body);
+        Ok(())
+    } else {
+        println!("failed to sync block {hash} from {addr}");
+        Ok(())
+    }
 }

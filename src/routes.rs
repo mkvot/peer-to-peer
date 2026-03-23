@@ -48,7 +48,10 @@ pub fn handle_get_blocks(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Res
 pub fn handle_get_data(stream: TcpStream, state: Arc<Mutex<NodeState>>, hash: &str) -> Result<()> {
     let blocks = state.lock().unwrap().blocks.clone();
     match blocks.get(hash) {
-        Some(block) => reply(stream, 200, block.clone()),
+        Some(content) => {
+            let body = format!(r#"{{"hash": "{hash}", "content": {content}}}"#);
+            reply(stream, 200, body)
+        },
         None => reply(stream, 404, r#"{"error": "block not found"}"#.to_string()),
     }
 }
@@ -56,7 +59,6 @@ pub fn handle_get_data(stream: TcpStream, state: Arc<Mutex<NodeState>>, hash: &s
 pub fn handle_post_block(stream: TcpStream, state: Arc<Mutex<NodeState>>, body: String) -> Result<()> {
     let json: Value = serde_json::from_str(&body)
         .map_err(|e| Error::new(ErrorKind::Other, e))?;
-    
     let hash = json["hash"].as_str()
         .ok_or(Error::new(ErrorKind::InvalidData, "missing hash"))?;
     let content = json["content"].as_str()
