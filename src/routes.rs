@@ -2,11 +2,12 @@ use std::{io::{Error, ErrorKind, Result}, net::TcpStream, sync::{Arc, Mutex}};
 
 use serde_json::Value;
 
-use crate::{client::forward_block, http::reply, state::NodeState};
+use crate::{client::forward_block, http::{Request, reply}, state::NodeState};
 
-pub fn handle_ping(stream: TcpStream) -> Result<()> {
-    // println!("ping from: {}", stream.peer_addr().unwrap());
-    reply(stream, 200, r#"{"status": "ok"}"#.to_string())
+pub fn handle_ping(stream: TcpStream, request: Request) -> Result<()> {
+    let addr = request.node_addr().unwrap_or("");
+    println!("ping from: {addr}");
+    reply(stream, 200, "".to_string())
 }
 
 pub fn handle_addr(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {

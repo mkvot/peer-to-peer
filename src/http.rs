@@ -10,6 +10,14 @@ pub struct Request {
     pub body: String,
 }
 
+impl Request {
+    pub fn node_addr(&self) -> Option<&str> {
+        self.headers.iter()
+            .find(|h| h.to_lowercase().starts_with("x-node-addr:"))
+            .map(|h| h["x-node-addr:".len()..].trim())
+    }
+}
+
 pub struct Response {
     pub status: u16,
     pub headers: Vec<String>,

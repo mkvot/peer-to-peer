@@ -15,7 +15,7 @@ pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
     } else {
         for peer in peers.iter() {
             if peer == &node.addr { continue };
-            match ping(peer) {
+            match ping(peer, &state) {
                 Ok(_) => {
                     announce(peer, &state)?;
                 },
@@ -35,7 +35,7 @@ pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
         println!("~~~ known peers: {:?}", peers);
         for peer in peers.iter() {
             if peer == &addr { continue; }
-            match ping(peer) {
+            match ping(peer, &state) {
                 Ok(_) => {
                     if tick % 3 == 0 {
                         if let Err(e) = sync_peers(peer, &state) {
@@ -52,9 +52,11 @@ pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
     }
 }
 
-fn ping(addr: &str) -> Result<()> {
+fn ping(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
     let mut stream = TcpStream::connect(addr)?;
-    stream.write_all("GET /ping HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".as_bytes())?;
+    let my_addr = state.lock().unwrap().addr.clone();
+    let request = format!("GET /ping HTTP/1.1\r\nHost: {addr}\r\nX-Node-Addr: {my_addr}\r\n\r\n").to_string();
+    stream.write_all(request.as_bytes())?;
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf)?;
 

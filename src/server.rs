@@ -15,7 +15,7 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<
     let request = parse_request(&buf[..n]);
 
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/ping") => handle_ping(stream),
+        ("GET", "/ping") => handle_ping(stream, request),
         ("GET", "/addr") => handle_addr(stream, state),
         ("POST", "/peers/announce") => handle_announce(stream, state, request.body),
         ("GET", "/getblocks") => handle_get_blocks(stream, state),
