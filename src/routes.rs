@@ -1,12 +1,12 @@
-use std::{io::{Error, ErrorKind, Result}, net::TcpStream, sync::{Arc, Mutex}};
+use std::{io::{Error, ErrorKind, Result}, net::TcpStream, sync::{Arc, Mutex}, thread};
 
 use serde_json::Value;
 
-use crate::{client::forward_block, http::{Request, reply}, state::NodeState};
+use crate::{client::forward_block, crypto::calculate_hash, http::{Request, reply}, state::NodeState};
 
 pub fn handle_ping(stream: TcpStream, request: Request) -> Result<()> {
     let addr = request.node_addr().unwrap_or("");
-    println!("ping from: {addr}");
+    println!("ping: {addr}");
     reply(stream, 200, "".to_string())
 }
 
@@ -68,16 +68,21 @@ pub fn handle_post_block(stream: TcpStream, state: Arc<Mutex<NodeState>>, body: 
     if already_have {
         return reply(stream, 200, r#"{"status": "already have it"}"#.to_string());
     }
+    
+    let calculated_hash = calculate_hash(content);
+    if calculated_hash != hash {
+        return reply(stream, 400, r#"{"error": "invalid hash"}"#.to_string());
+    }
 
     state.lock().unwrap().blocks.insert(hash.to_string(), content.to_string());
     println!("Stored block {hash}");
-
+    
     let peers = state.lock().unwrap().peers.clone();
-    for peer in peers.iter() {
-        if let Err(e) = forward_block(peer, &body, &state) {
-            println!("failed to forward block to {peer}: {e}");
+    thread::spawn(move || {
+        for peer in peers {
+            let _ = forward_block(&peer, &body, &state);
         }
-    }
+    });
 
     Ok(())
 }
