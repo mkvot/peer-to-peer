@@ -1,5 +1,5 @@
 use crate::http::{parse_request};
-use crate::routes::{handle_addr, handle_announce, handle_get_blocks, handle_get_blocks_from, handle_get_data, handle_not_found, handle_ping, handle_post_block};
+use crate::routes::{handle_addr, handle_announce, handle_get_blocks, handle_get_blocks_from, handle_get_data, handle_not_found, handle_ping, handle_post_block, handle_post_inv};
 use crate::state::NodeState;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -28,6 +28,7 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<
             let hash = path.trim_start_matches("/getblocks/");
             handle_get_blocks_from(stream, state, hash)
         },
+        ("POST", "/inv") => handle_post_inv(stream, state, request.body),
         _ => handle_not_found(stream),
     }
 }

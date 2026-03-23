@@ -18,7 +18,7 @@ pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
 
     let mut tick = 0u32;
     loop {
-        thread::sleep(Duration::from_secs(3));
+        thread::sleep(Duration::from_secs(8));
         tick += 1;
 
         let peers = state.lock().unwrap().peers.clone();
@@ -33,13 +33,11 @@ pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
                 continue;
             }
 
-            // every tick: sync peers
             if let Err(e) = sync_peers(peer, &state) {
                 println!("failed to sync peers with {peer}: {e}");
             }
 
-            // every 3rd tick: sync blocks
-            if tick % 3 == 0 {
+            if tick % 2 == 0 {
                 if let Err(e) = sync_blocks(peer, &state) {
                     println!("failed to sync blocks from {peer}: {e}");
                 }
@@ -198,4 +196,11 @@ fn get_block(addr:&str, state: &Arc<Mutex<NodeState>>, hash: String) -> Result<(
         println!("failed to sync block {hash} from {addr}");
         Ok(())
     }
+}
+
+pub fn forward_inv(addr: &str, body: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+    let my_addr = state.lock().unwrap().addr.clone();
+    let request = Request::post("/inv", &my_addr, addr, body.to_string());
+    send_request(addr, request)?;
+    Ok(())
 }
