@@ -18,18 +18,18 @@ tmux split-window -v -t p2p:0.0
 tmux split-window -v -t p2p:0.1
 
 tmux send-keys -t p2p:0.0 './target/debug/peer-to-peer 8080 peers_8080.json' Enter
-sleep 0.3
+sleep 0.5
 
 tmux send-keys -t p2p:0.1 './target/debug/peer-to-peer 8081 peers_bootstrap.json' Enter
-sleep 0.3
+sleep 0.5
 tmux send-keys -t p2p:0.2 './target/debug/peer-to-peer 8082 peers_bootstrap.json' Enter
-sleep 0.3
+sleep 0.5
 tmux send-keys -t p2p:0.3 './target/debug/peer-to-peer 8083 peers_bootstrap.json' Enter
-sleep 0.3
+sleep 0.5
 tmux send-keys -t p2p:0.4 './target/debug/peer-to-peer 8084 peers_bootstrap.json' Enter
-sleep 0.3
+sleep 0.5
 tmux send-keys -t p2p:0.2 './target/debug/peer-to-peer 8085 peers_bootstrap.json' Enter
-sleep 0.3
+sleep 0.5
 
 tmux attach -t p2p
 sleep 1

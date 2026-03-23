@@ -130,3 +130,24 @@ pub fn handle_post_inv(stream: TcpStream, state: Arc<Mutex<NodeState>>, body: St
 
     Ok(())
 }
+
+pub fn handle_status(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let node = state.lock().unwrap();
+    let body = serde_json::json!({
+        "addr": node.addr,
+        "peers": node.peers,
+        "block_count": node.blocks.len(),
+        "transaction_count": node.transactions.len(),
+    }).to_string();
+    reply(stream, 200, body)
+}
+
+pub fn handle_options(mut stream: TcpStream) -> Result<()> {
+    let response = "HTTP/1.1 204 No Content\r\n\
+        Access-Control-Allow-Origin: *\r\n\
+        Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+        Access-Control-Allow-Headers: Content-Type, X-Node-Addr\r\n\
+        Content-Length: 0\r\n\
+        \r\n";
+    stream.write_all(response.as_bytes())
+}
