@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>P2P Monitor</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: monospace;
+      background: #111;
+      color: #eee;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #topbar {
+      padding: 12px 20px 10px;
+      border-bottom: 1px solid #222;
+      flex-shrink: 0;
+    }
+
+    h1 { color: #7af; font-size: 16px; display: inline; margin-right: 12px; }
+    #subtitle { color: #555; font-size: 12px; display: inline; }
+
+    #controls {
+      margin-top: 8px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    input[type="number"] {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      color: #eee;
+      padding: 4px 8px;
+      font-family: monospace;
+      font-size: 13px;
+      border-radius: 4px;
+    }
+
+    button {
+      background: #7af;
+      color: #111;
+      border: none;
+      padding: 5px 14px;
+      font-family: monospace;
+      font-size: 13px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    button:hover { background: #9cf; }
+
+    #status-line { color: #555; font-size: 12px; }
+
+    /* ── main split layout ── */
+    #main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* left: graph — takes ~75% */
+    #left {
+      flex: 3;
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      min-width: 0;
+    }
+
+    #canvas-wrap {
+      flex: 1;
+      position: relative;
+      min-height: 0;
+    }
+
+    canvas {
+      border: 1px solid #222;
+      border-radius: 6px;
+      background: #161616;
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #legend {
+      margin-top: 6px;
+      font-size: 11px;
+      color: #555;
+      flex-shrink: 0;
+    }
+
+    /* right: node list — scrollable, ~25% */
+    #right {
+      flex: 1;
+      min-width: 220px;
+      max-width: 320px;
+      border-left: 1px solid #222;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #right-header {
+      padding: 10px 12px 8px;
+      border-bottom: 1px solid #222;
+      font-size: 12px;
+      color: #666;
+      flex-shrink: 0;
+    }
+
+    #node-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+
+    #node-list::-webkit-scrollbar { width: 6px; }
+    #node-list::-webkit-scrollbar-track { background: #1a1a1a; }
+    #node-list::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+    .node-card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 5px;
+      padding: 7px 10px;
+      margin-bottom: 6px;
+      font-size: 12px;
+    }
+
+    .node-addr { color: #7af; font-weight: bold; }
+    .node-peers { color: #666; margin-top: 3px; line-height: 1.4; }
+    .node-stats { color: #5a5; margin-top: 2px; }
+
+    .offline { border-color: #3a2020; }
+    .offline .node-addr { color: #f66; }
+    .offline .node-peers { color: #4a3030; }
+  </style>
+</head>
+<body>
+
+  <div id="topbar">
+    <h1>P2P network</h1>
+    <span id="subtitle">polling /status on each node</span>
+    <div id="controls">
+      <label>ports:
+        <input id="port-start" type="number" value="9000" style="width:65px"> –
+        <input id="port-end"   type="number" value="9100" style="width:65px">
+      </label>
+      <button onclick="refresh()">Scan</button>
+      <label>every
+        <input id="interval" type="number" value="2" min="1" max="30" style="width:38px">s
+      </label>
+      <span id="status-line"></span>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="left">
+      <div id="canvas-wrap">
+        <canvas id="graph"></canvas>
+      </div>
+      <div id="legend">
+        ● <span style="color:#7af">online</span> &nbsp;
+        ● <span style="color:#f66">offline</span> &nbsp;
+        — mutual connection &nbsp;
+        - - one-way
+      </div>
+    </div>
+
+    <div id="right">
+      <div id="right-header" id="node-count">nodes</div>
+      <div id="node-list"></div>
+    </div>
+  </div>
+
+  <script>
+    const BASE = "http://127.0.0.1";
+    let intervalId = null;
+
+    async function fetchStatus(port) {
+      try {
+        const r = await fetch(`${BASE}:${port}/status`, { signal: AbortSignal.timeout(1500) });
+        if (!r.ok) return null;
+        return await r.json();
+      } catch { return null; }
+    }
+
+    async function scanPorts() {
+      const start = parseInt(document.getElementById("port-start").value);
+      const end   = parseInt(document.getElementById("port-end").value);
+      const ports = [];
+      for (let p = start; p <= end; p++) ports.push(String(p));
+      const results = await Promise.all(ports.map(async port => {
+        const data = await fetchStatus(port);
+        return { port, data };
+      }));
+      return results.filter(r => r.data !== null);
+    }
+
+    async function refresh() {
+      document.getElementById("status-line").textContent = "scanning…";
+      const results = await scanPorts();
+      const online = results.length;
+      document.getElementById("status-line").textContent =
+        `${online} node${online !== 1 ? "s" : ""} online`;
+      document.getElementById("right-header").textContent =
+        `${online} node${online !== 1 ? "s" : ""}`;
+      drawGraph(results);
+      drawList(results);
+    }
+
+    function setRefresh() {
+      clearInterval(intervalId);
+      const secs = parseInt(document.getElementById("interval").value) * 1000;
+      intervalId = setInterval(refresh, secs);
+    }
+
+    document.getElementById("interval").addEventListener("change", setRefresh);
+
+    // ── graph ─────────────────────────────────────────────────────────────────
+
+    function drawGraph(results) {
+      const canvas = document.getElementById("graph");
+      const wrap   = document.getElementById("canvas-wrap");
+
+      // resize canvas to match CSS layout
+      canvas.width  = wrap.clientWidth;
+      canvas.height = wrap.clientHeight;
+
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const n = results.length;
+      if (n === 0) return;
+
+      const cx = canvas.width  / 2;
+      const cy = canvas.height / 2;
+      const r  = Math.min(cx, cy) - 50;
+
+      const positions = {};
+      results.forEach(({ port }, i) => {
+        const angle = (2 * Math.PI * i / n) - Math.PI / 2;
+        positions[port] = {
+          x: cx + r * Math.cos(angle),
+          y: cy + r * Math.sin(angle),
+        };
+      });
+
+      // edges
+      results.forEach(({ port, data }) => {
+        if (!data) return;
+        const from = positions[port];
+        data.peers.forEach(peer => {
+          const peerPort = peer.split(":")[1];
+          const to = positions[peerPort];
+          if (!to) return;
+          const peerData = results.find(r => r.port === peerPort)?.data;
+          const mutual   = peerData?.peers.some(p => p.endsWith(`:${port}`));
+          ctx.beginPath();
+          ctx.moveTo(from.x, from.y);
+          ctx.lineTo(to.x,   to.y);
+          ctx.strokeStyle = mutual ? "#7af5" : "#7af2";
+          ctx.lineWidth   = mutual ? 1.5 : 1;
+          ctx.setLineDash(mutual ? [] : [4, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        });
+      });
+
+      // nodes
+      const nodeR = n > 60 ? 10 : n > 30 ? 13 : 17;
+      results.forEach(({ port, data }) => {
+        const pos    = positions[port];
+        const online = data !== null;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, nodeR, 0, 2 * Math.PI);
+        ctx.fillStyle   = online ? "#182030" : "#281818";
+        ctx.fill();
+        ctx.strokeStyle = online ? "#7af" : "#f66";
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
+
+        ctx.fillStyle    = online ? "#7af" : "#f66";
+        ctx.font         = `bold ${nodeR < 13 ? 9 : 11}px monospace`;
+        ctx.textAlign    = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(port, pos.x, pos.y);
+
+        if (online && nodeR >= 13) {
+          ctx.fillStyle = "#5a5";
+          ctx.font      = "9px monospace";
+          ctx.fillText(`${data.block_count}b`, pos.x, pos.y + nodeR + 9);
+        }
+      });
+    }
+
+    // ── node list (right panel) ───────────────────────────────────────────────
+
+    function drawList(results) {
+      const list = document.getElementById("node-list");
+      if (results.length === 0) {
+        list.innerHTML = '<div style="color:#444;padding:12px;font-size:12px">no nodes found</div>';
+        return;
+      }
+      list.innerHTML = results.map(({ port, data }) => {
+        if (!data) return `
+          <div class="node-card offline">
+            <div class="node-addr">:${port}</div>
+            <div class="node-peers">offline</div>
+          </div>`;
+        const peers = data.peers.map(p => ":" + p.split(":")[1]).join(", ") || "none";
+        return `
+          <div class="node-card">
+            <div class="node-addr">${data.addr}</div>
+            <div class="node-peers">${peers}</div>
+            <div class="node-stats">blocks: ${data.block_count} · txns: ${data.transaction_count}</div>
+          </div>`;
+      }).join("");
+    }
+
+    refresh();
+    setRefresh();
+  </script>
+</body>
+</html>
