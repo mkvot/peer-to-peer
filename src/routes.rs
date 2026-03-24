@@ -77,7 +77,10 @@ pub fn handle_post_block(stream: TcpStream, state: Arc<Mutex<NodeState>>, body: 
     state.lock().unwrap().blocks.insert(hash.to_string(), content.to_string());
     println!("Stored block {hash}");
     
+    reply(stream, 200, r#"{"status": "ok"}"#.to_string())?;
+    
     let peers = state.lock().unwrap().peers.clone();
+    let state = state.clone();
     thread::spawn(move || {
         for peer in peers {
             let _ = forward_block(&peer, &body, &state);
