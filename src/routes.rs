@@ -122,11 +122,14 @@ pub fn handle_post_inv(stream: TcpStream, state: Arc<Mutex<NodeState>>, body: St
     reply(stream, 200, r#"{"status": "ok"}"#.to_string())?;
 
     let peers = state.lock().unwrap().peers.clone();
-    for peer in peers.iter() {
-        if let Err(e) = forward_inv(peer, &body, &state) {
-            println!("failed to forward transaction to {peer}: {e}");
+    let state = state.clone();
+    thread::spawn(move || {
+        for peer in peers {
+            if let Err(e) = forward_inv(&peer, &body, &state) {
+                println!("failed to forward transaction to {peer}: {e}");
+            }
         }
-    }
+    });
 
     Ok(())
 }
