@@ -116,12 +116,6 @@ pub fn reply(mut stream: TcpStream, status: u16, body: String) -> Result<()> {
         _ => "OK",
     };
 
-    // let response = format!(
-    //     "HTTP/1.1 {status} {status_text}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-    //     body.len(),
-    //     body
-    // );
-
     let response = format!(
         "HTTP/1.1 {status} {status_text}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
         body.len(), body

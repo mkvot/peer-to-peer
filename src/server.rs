@@ -36,7 +36,7 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<
 }
 
 pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
-    let addr = state.lock().unwrap().addr.clone();
+    let addr = state.lock().unwrap().bind_addr.clone();
     let listener = TcpListener::bind(addr)?;
 
     for stream in listener.incoming() {
