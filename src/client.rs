@@ -1,13 +1,15 @@
 use std::{
-    io::{Error, ErrorKind, Read, Result, Write},
+    io::{Error, ErrorKind, Result, Write},
     net::TcpStream,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
 
+use serde_json::Value;
+
 use crate::{
-    http::{Request, Response, parse_response},
+    http::{Request, Response, read_response},
     state::NodeState,
 };
 
@@ -71,10 +73,7 @@ fn send_request(addr: &str, request: Request) -> Result<Response> {
     );
 
     stream.write_all(msg.as_bytes())?;
-    let mut buf = [0u8; 4096];
-    let n = stream.read(&mut buf)?;
-
-    Ok(parse_response(&buf[..n]))
+    read_response(&mut stream)
 }
 
 fn ping(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
@@ -202,7 +201,16 @@ fn get_block(addr: &str, state: &Arc<Mutex<NodeState>>, hash: String) -> Result<
 
     if response.status == 200 {
         println!("synced block {hash} from {addr}");
-        state.lock().unwrap().blocks.insert(hash, response.body);
+        let json: Value = serde_json::from_str(&response.body)
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let content = json["content"]
+            .as_str()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "missing content"))?;
+        state
+            .lock()
+            .unwrap()
+            .blocks
+            .insert(hash, content.to_string());
         Ok(())
     } else {
         println!("failed to sync block {hash} from {addr}");

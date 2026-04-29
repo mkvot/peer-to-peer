@@ -61,7 +61,11 @@ pub fn handle_get_data(stream: TcpStream, state: Arc<Mutex<NodeState>>, hash: &s
     let blocks = state.lock().unwrap().blocks.clone();
     match blocks.get(hash) {
         Some(content) => {
-            let body = format!(r#"{{"hash": "{hash}", "content": {content}}}"#);
+            let body = serde_json::json!({
+                "hash": hash,
+                "content": content,
+            })
+            .to_string();
             reply(stream, 200, body)
         }
         None => reply(stream, 404, r#"{"error": "block not found"}"#.to_string()),
