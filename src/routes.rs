@@ -182,6 +182,16 @@ pub fn handle_status(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<
         "peers": node.peers,
         "block_count": node.blocks.len(),
         "transaction_count": node.transactions.len(),
+        "ledger_len": node.ledger.len(),
+        "ledger_hash": node.ledger_hash,
+        "next_round": node.next_round,
+        "mempool_count": node.tx_pool.len(),
+        "commit_count": node.commits.len(),
+        "consensus_enabled": node.consensus_enabled,
+        "forward_inv_enabled": node.forward_inv_enabled,
+        "round_secs": node.round_secs,
+        "data_dir": node.data_dir,
+        "blocked_peer_count": node.blocked_peers.len(),
     })
     .to_string();
     reply(stream, 200, body)
