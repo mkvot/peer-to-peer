@@ -1,6 +1,7 @@
 mod client;
 mod crypto;
 mod http;
+mod models;
 mod routes;
 mod server;
 mod state;
