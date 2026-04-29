@@ -5,8 +5,10 @@ mod models;
 mod routes;
 mod server;
 mod state;
+mod storage;
 
 use crate::state::NodeState;
+use crate::storage::init_storage;
 use std::{
     env, fs,
     io::Result,
@@ -26,8 +28,9 @@ fn main() -> Result<()> {
 
     let bind_addr = format!("0.0.0.0:{port}");
     let announce_addr = format!("{ip}:{port}");
-    let state: Arc<Mutex<NodeState>> =
-        Arc::new(Mutex::new(NodeState::new(announce_addr, bind_addr)));
+    let mut node_state = NodeState::new(announce_addr, bind_addr);
+    init_storage(&mut node_state)?;
+    let state: Arc<Mutex<NodeState>> = Arc::new(Mutex::new(node_state));
 
     if let Some(path) = env::args().nth(2) {
         let json = fs::read_to_string(path).unwrap();
