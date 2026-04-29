@@ -101,10 +101,9 @@ def post_block(port: int, content: str) -> bool:
         return False
 
 def post_inv(port: int, content: str) -> bool:
-    h = sha256(content)
     try:
-        r = requests.post(f"http://127.0.0.1:{port}/inv",
-                          json={"hash": h, "content": content}, timeout=TIMEOUT)
+        r = requests.post(f"http://127.0.0.1:{port}/tx",
+                          json={"body": content}, timeout=TIMEOUT)
         return r.status_code == 200
     except:
         return False
@@ -127,7 +126,7 @@ def snapshot(ports: list, label: str):
         s = status(port)
         if s:
             peers = [p.split(":")[1] for p in s["peers"]]
-            log(f"  :{port}  peers={peers}  blocks={s['block_count']}  txns={s['transaction_count']}")
+            log(f"  :{port}  peers={peers}  blocks={s['block_count']}  ledger={s.get('ledger_len', 0)}  pending={s.get('mempool_count', 0)}")
         else:
             log(f"  :{port}  OFFLINE", "red")
 

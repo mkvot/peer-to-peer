@@ -39,6 +39,11 @@ sleep 1
 #   -H 'Content-Type: application/json' \
 #   -d '{"hash": "abc123", "content": "hello world"}'
 
+# for testing transactions
+# curl -X POST http://127.0.0.1:8080/tx \
+#   -H 'Content-Type: application/json' \
+#   -d '{"body": "hello world"}'
+
 # curl http://127.0.0.1:8081/getblocks
 # curl http://127.0.0.1:8081/getdata/abc123
 

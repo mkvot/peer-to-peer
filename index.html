@@ -320,7 +320,7 @@
           <div class="node-card">
             <div class="node-addr">${data.addr}</div>
             <div class="node-peers">${peers}</div>
-            <div class="node-stats">blocks: ${data.block_count} · txns: ${data.transaction_count}</div>
+            <div class="node-stats">blocks: ${data.block_count} · ledger: ${data.ledger_len ?? 0} · pending: ${data.mempool_count ?? 0}</div>
           </div>`;
       }).join("");
     }

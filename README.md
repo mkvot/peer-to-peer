@@ -37,7 +37,7 @@ Võrguga liitumiseks peab uuel sõlmel olema vähemalt ühe juba töötava sõlm
 ## Protokolli kirjeldus
 
 ### `GET /status`
-Tagastab sõlme hetkeseisu: aadressi, naabrite nimekirja ning plokkide ja transaktsioonide arvu.
+Tagastab sõlme hetkeseisu: aadressi, naabrite nimekirja ning plokkide ja ledgeri seisu.
 
 ```bash
 curl http://127.0.0.1:5000/status
@@ -48,7 +48,9 @@ curl http://127.0.0.1:5000/status
   "addr": "127.0.0.1:5000",
   "peers": ["127.0.0.1:5001", "127.0.0.1:5002"],
   "block_count": 5,
-  "transaction_count": 12
+  "ledger_len": 3,
+  "ledger_hash": "72df...",
+  "mempool_count": 0
 }
 ```
 
@@ -111,19 +113,43 @@ curl http://127.0.0.1:5000/getdata/f3a2...
 }
 ```
 
-### `POST /inv`
-Saadab uue transaktsiooni. Kui sõlmel seda veel pole, salvestab ta selle ja saadab (floodib) edasi oma naabritele.
+### `POST /tx`
+Loob selles sõlmes uue transaktsiooni. Sõlm lisab aadressi, järjenumbri ja deterministliku id.
 
 ```bash
-curl -X POST http://127.0.0.1:5000/inv \
-  -d '{
-    "hash": "012ff72aa4e6f67d836bdce670c938023c08c90cdc1ee33f8c4151151ab6f028",
-    "content": "promise"
-  }'
+curl -X POST http://127.0.0.1:5000/tx \
+  -d '{"body": "promise"}'
 ```
 
 ```json
-{ "status": "ok" }
+{
+  "status": "ok",
+  "tx": {
+    "id": "f26e...",
+    "origin": "127.0.0.1:5000",
+    "seq": 1,
+    "body": "promise"
+  }
+}
+```
+
+### `POST /inv`
+Saadab edasi juba loodud typed transaktsiooni. Räsi/sisu kujul vana formaat ei ole kasutusel.
+
+```json
+{
+  "id": "f26e...",
+  "origin": "127.0.0.1:5000",
+  "seq": 1,
+  "body": "promise"
+}
+```
+
+### `GET /ledger`
+Tagastab järjestatud ledgeri transaktsioonid.
+
+```bash
+curl http://127.0.0.1:5000/ledger
 ```
 
 ### `POST /block`

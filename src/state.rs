@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    env,
-    path::PathBuf,
-};
+use std::{collections::HashSet, env, path::PathBuf};
 
 use indexmap::IndexMap;
 
@@ -14,7 +10,6 @@ pub struct NodeState {
     pub bind_addr: String,
     pub peers: Vec<String>,
     pub blocks: IndexMap<String, String>,
-    pub transactions: HashMap<String, String>,
     pub tx_pool: IndexMap<String, Transaction>,
     pub ledger: Vec<Transaction>,
     pub ledger_ids: HashSet<String>,
@@ -37,7 +32,6 @@ impl NodeState {
             bind_addr,
             peers: Vec::new(),
             blocks: IndexMap::new(),
-            transactions: HashMap::new(),
             tx_pool: IndexMap::new(),
             ledger: Vec::new(),
             ledger_ids: HashSet::new(),
