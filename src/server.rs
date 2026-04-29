@@ -1,5 +1,9 @@
-use crate::http::{parse_request};
-use crate::routes::{handle_addr, handle_announce, handle_get_blocks, handle_get_blocks_from, handle_get_data, handle_not_found, handle_options, handle_ping, handle_post_block, handle_post_inv, handle_status};
+use crate::http::parse_request;
+use crate::routes::{
+    handle_addr, handle_announce, handle_get_blocks, handle_get_blocks_from, handle_get_data,
+    handle_not_found, handle_options, handle_ping, handle_post_block, handle_post_inv,
+    handle_status,
+};
 use crate::state::NodeState;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -22,12 +26,12 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<
         ("GET", path) if path.starts_with("/getdata/") => {
             let hash = path.trim_start_matches("/getdata/");
             handle_get_data(stream, state, hash)
-        },
+        }
         ("POST", "/block") => handle_post_block(stream, state, request.body),
         ("GET", path) if path.starts_with("/getblocks/") => {
             let hash = path.trim_start_matches("/getblocks/");
             handle_get_blocks_from(stream, state, hash)
-        },
+        }
         ("POST", "/inv") => handle_post_inv(stream, state, request.body),
         ("GET", "/status") => handle_status(stream, state),
         ("OPTIONS", _) => handle_options(stream),
@@ -47,6 +51,6 @@ pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
             }
         });
     }
-    
+
     Ok(())
 }

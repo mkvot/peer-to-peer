@@ -1,12 +1,17 @@
 mod client;
+mod crypto;
 mod http;
 mod routes;
 mod server;
 mod state;
-mod crypto;
 
-use std::{env, fs, io::Result, sync::{Arc, Mutex}, thread};
 use crate::state::NodeState;
+use std::{
+    env, fs,
+    io::Result,
+    sync::{Arc, Mutex},
+    thread,
+};
 
 fn main() -> Result<()> {
     let port = env::args().nth(1).unwrap_or_else(|| {
@@ -14,11 +19,14 @@ fn main() -> Result<()> {
         println!("Optional 3rd arg: your LAN IP, e.g. 192.168.1.42");
         std::process::exit(1);
     });
-    let ip = env::args().nth(3).unwrap_or_else(|| "127.0.0.1".to_string());
+    let ip = env::args()
+        .nth(3)
+        .unwrap_or_else(|| "127.0.0.1".to_string());
 
     let bind_addr = format!("0.0.0.0:{port}");
     let announce_addr = format!("{ip}:{port}");
-    let state: Arc<Mutex<NodeState>> = Arc::new(Mutex::new(NodeState::new(announce_addr, bind_addr)));
+    let state: Arc<Mutex<NodeState>> =
+        Arc::new(Mutex::new(NodeState::new(announce_addr, bind_addr)));
 
     if let Some(path) = env::args().nth(2) {
         let json = fs::read_to_string(path).unwrap();

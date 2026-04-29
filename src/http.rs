@@ -16,10 +16,7 @@ impl Request {
         Self {
             method: method.to_string(),
             path: path.to_string(),
-            headers: vec![
-                format!("Host: {addr}"),
-                format!("X-Node-Addr: {my_addr}"),
-            ],
+            headers: vec![format!("Host: {addr}"), format!("X-Node-Addr: {my_addr}")],
             body: String::new(),
             ..Default::default()
         }
@@ -42,7 +39,8 @@ impl Request {
     }
 
     pub fn node_addr(&self) -> Option<&str> {
-        self.headers.iter()
+        self.headers
+            .iter()
             .find(|h| h.to_lowercase().starts_with("x-node-addr:"))
             .map(|h| h["x-node-addr:".len()..].trim())
     }
@@ -91,8 +89,10 @@ pub fn parse_response(buf: &[u8]) -> Response {
     let (head, body) = request.split_once("\r\n\r\n").unwrap_or(("", ""));
 
     let mut lines = head.split("\r\n");
-    
-    let status = lines.next().unwrap_or("")
+
+    let status = lines
+        .next()
+        .unwrap_or("")
         .split_whitespace()
         .nth(1)
         .and_then(|s| s.parse().ok())
@@ -118,7 +118,8 @@ pub fn reply(mut stream: TcpStream, status: u16, body: String) -> Result<()> {
 
     let response = format!(
         "HTTP/1.1 {status} {status_text}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        body
     );
 
     stream.write_all(response.as_bytes())?;
