@@ -41,8 +41,12 @@ pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
             }
 
             if ping(peer, &state).is_err() {
-                println!("{peer} is dead, removing");
-                state.lock().unwrap().peers.retain(|p| p != peer);
+                if state.lock().unwrap().consensus_enabled {
+                    println!("{peer} is unreachable, keeping it for consensus membership");
+                } else {
+                    println!("{peer} is dead, removing");
+                    state.lock().unwrap().peers.retain(|p| p != peer);
+                }
                 continue;
             }
 

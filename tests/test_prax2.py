@@ -548,7 +548,8 @@ def test_no_quorum(binary: str, base_port: int):
         tx = post_tx(port, "transaction without reachable quorum")
         log(f"posted tx to :{port}: {tx['id']}")
 
-        time.sleep(5)
+        log("waiting longer than one peer-maintenance tick...")
+        time.sleep(15)
         stat = ledger_status(port)
         entries = ledger(port)
         log(
