@@ -277,6 +277,23 @@ def wait_same_ledger(ports, expected_len=None, timeout=35):
     raise AssertionError("nodes did not converge to the same ledger before timeout")
 
 
+def collect_ledger_snapshots(ports):
+    snapshots = {}
+    for port in ports:
+        try:
+            snapshots[port] = {"status": ledger_status(port), "ledger": ledger(port)}
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, RuntimeError):
+            snapshots[port] = {
+                "status": {
+                    "ledger_len": -1,
+                    "ledger_hash": "unreachable",
+                    "commit_count": -1,
+                },
+                "ledger": [],
+            }
+    return snapshots
+
+
 def test_divergence(binary: str, base_port: int):
     ports = [base_port + i for i in range(3)]
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -553,6 +570,7 @@ def test_load(binary: str, base_port: int, sizes, duration: int):
         ports = [base_port + 500 + (index * 100) + i for i in range(node_count)]
         data_dir = f"/tmp/p2p-prax2-load-{run_id}-{node_count}"
         posted = 0
+        failed_posts = 0
         start_time = None
 
         log(f"\n[load size {node_count}]")
@@ -569,11 +587,17 @@ def test_load(binary: str, base_port: int, sizes, duration: int):
             while time.time() < deadline:
                 port = random.choice(ports)
                 body = f"load tx {posted + 1} from {port}"
-                post_tx(port, body)
-                posted += 1
+                try:
+                    post_tx(port, body)
+                    posted += 1
+                except (urllib.error.URLError, TimeoutError, RuntimeError) as error:
+                    failed_posts += 1
+                    if failed_posts <= 3:
+                        log(f"post_failed port={port} error={error}")
                 time.sleep(0.25)
 
             log(f"posted_transactions={posted}")
+            log(f"failed_posts={failed_posts}")
 
             converged = False
             convergence_secs = None
@@ -583,10 +607,7 @@ def test_load(binary: str, base_port: int, sizes, duration: int):
                 converged = True
             except AssertionError as error:
                 log(f"convergence_result=failed: {error}")
-                snapshots = {
-                    port: {"status": ledger_status(port), "ledger": ledger(port)}
-                    for port in ports
-                }
+                snapshots = collect_ledger_snapshots(ports)
 
             ledger_lengths = {
                 port: snapshots[port]["status"]["ledger_len"] for port in ports
@@ -609,6 +630,7 @@ def test_load(binary: str, base_port: int, sizes, duration: int):
                 {
                     "node_count": node_count,
                     "posted": posted,
+                    "failed_posts": failed_posts,
                     "converged": converged,
                     "convergence_secs": convergence_secs,
                     "min_ledger_len": min(ledger_lengths.values()),

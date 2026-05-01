@@ -340,6 +340,6 @@ Viimati kontrollitud tulemused:
 | `--invalid` | Vigase id-ga `/inv` sai `400` vastuse ja ei jõudnud ledgerisse; järgnev korrektne tx commititi kõigis sõlmedes. |
 | `--no-quorum` | 1 sõlm + 4 kättesaamatut phantom peer'i ei commitinud transaktsiooni; tx jäi mempooli. |
 | `--partition` | 3-sõlmeline ja 2-sõlmeline eraldatud grupp converge'isid eraldi, kuid lõpuks erinevate ledger hash'idega. |
-| `--load --load-sizes 5 --load-duration 5` | 5 sõlme commitisid 20 transaktsiooni; kõik jõudsid sama ledger hash'ini umbes 6.5 sekundiga. |
+| `--load --load-sizes 50 --load-duration 30` | 50 sõlme commitisid 120 transaktsiooni; kõik jõudsid sama ledger hash'ini umbes 30.7 sekundiga. |
 
 Täismõõtmise jaoks kasutab `--load` vaikimisi suurusi `5,10,25,50` ja 30 sekundit transaktsioonide tekitamist iga suuruse kohta.
