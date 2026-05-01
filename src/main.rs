@@ -1,4 +1,5 @@
 mod client;
+mod consensus;
 mod crypto;
 mod http;
 mod ledger;

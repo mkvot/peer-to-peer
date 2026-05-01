@@ -8,13 +8,14 @@ use std::{
 use serde_json::Value;
 
 use crate::{
-    client::{forward_block, forward_inv},
+    client::{forward_block, forward_inv, post_commit},
+    consensus::{apply_commit, build_proposal, validate_commit_for_state},
     crypto::calculate_hash,
     http::{Request, reply},
     ledger::{IngestResult, create_local_transaction, ingest_transaction},
-    models::Transaction,
+    models::{Commit, Transaction},
     state::NodeState,
-    storage::write_ledger,
+    storage::{persist_commit, write_ledger},
 };
 
 pub fn handle_ping(stream: TcpStream, request: Request) -> Result<()> {
@@ -252,10 +253,112 @@ pub fn handle_ledger_status(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> 
     reply(stream, 200, body)
 }
 
+pub fn handle_get_consensus_proposal(
+    stream: TcpStream,
+    state: Arc<Mutex<NodeState>>,
+    round: u64,
+) -> Result<()> {
+    let proposal = {
+        let node = state.lock().unwrap();
+        build_proposal(&node, round)
+    };
+    let body = serde_json::to_string(&proposal).map_err(|e| Error::new(ErrorKind::Other, e))?;
+    reply(stream, 200, body)
+}
+
+pub fn handle_post_consensus_commit(
+    stream: TcpStream,
+    state: Arc<Mutex<NodeState>>,
+    body: String,
+) -> Result<()> {
+    let commit: Commit = match serde_json::from_str(&body) {
+        Ok(commit) => commit,
+        Err(e) => {
+            return reply(
+                stream,
+                400,
+                serde_json::json!({ "error": format!("invalid commit format: {e}") }).to_string(),
+            );
+        }
+    };
+
+    let mut peers = Vec::new();
+    let mut accepted = false;
+    let response = {
+        let mut node = state.lock().unwrap();
+        match validate_commit_for_state(&node, &commit) {
+            Ok(()) if commit.payload.round < node.next_round => {
+                serde_json::json!({ "status": "already_committed" })
+            }
+            Ok(()) => {
+                apply_commit(&mut node, commit.clone())
+                    .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+                persist_commit(&node, &commit)?;
+                peers = node.peers.clone();
+                accepted = true;
+                serde_json::json!({ "status": "ok" })
+            }
+            Err(e) if is_conflict_error(&e) => {
+                let body = serde_json::json!({
+                    "error": e,
+                    "ledger_hash": node.ledger_hash,
+                    "next_round": node.next_round,
+                });
+                return reply(stream, 409, body.to_string());
+            }
+            Err(e) => {
+                return reply(
+                    stream,
+                    400,
+                    serde_json::json!({ "error": format!("bad commit: {e}") }).to_string(),
+                );
+            }
+        }
+    };
+
+    reply(stream, 200, response.to_string())?;
+
+    if accepted {
+        let state = state.clone();
+        thread::spawn(move || {
+            for peer in peers {
+                if let Err(e) = post_commit(&peer, &commit, &state) {
+                    println!("failed to forward commit to {peer}: {e}");
+                }
+            }
+        });
+    }
+
+    Ok(())
+}
+
+pub fn handle_get_consensus_commits(
+    stream: TcpStream,
+    state: Arc<Mutex<NodeState>>,
+    from_round: u64,
+) -> Result<()> {
+    let commits: Vec<Commit> = {
+        let node = state.lock().unwrap();
+        node.commits
+            .iter()
+            .filter(|commit| commit.payload.round >= from_round)
+            .cloned()
+            .collect()
+    };
+    let body = serde_json::to_string(&commits).map_err(|e| Error::new(ErrorKind::Other, e))?;
+    reply(stream, 200, body)
+}
+
 pub fn handle_status(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
     let node = state.lock().unwrap();
     let body = ledger_status_json(&node).to_string();
     reply(stream, 200, body)
+}
+
+fn is_conflict_error(error: &str) -> bool {
+    error.contains("ledger hash mismatch")
+        || error.contains("does not match next round")
+        || error.contains("conflicts with already committed")
 }
 
 fn ledger_status_json(node: &NodeState) -> Value {

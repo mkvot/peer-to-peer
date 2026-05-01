@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::{
     http::{Request, Response, read_response},
+    models::{Commit, Proposal},
     state::NodeState,
 };
 
@@ -74,6 +75,10 @@ fn send_request(addr: &str, request: Request) -> Result<Response> {
 
     stream.write_all(msg.as_bytes())?;
     read_response(&mut stream)
+}
+
+fn is_blocked(addr: &str, state: &Arc<Mutex<NodeState>>) -> bool {
+    state.lock().unwrap().blocked_peers.contains(addr)
 }
 
 fn ping(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
@@ -149,6 +154,10 @@ fn sync_peers(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
 }
 
 pub fn forward_block(addr: &str, body: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+    if is_blocked(addr, state) {
+        return Ok(());
+    }
+
     let my_addr = state.lock().unwrap().addr.clone();
 
     let request = Request::post("/block", &my_addr, addr, body.to_string());
@@ -219,8 +228,96 @@ fn get_block(addr: &str, state: &Arc<Mutex<NodeState>>, hash: String) -> Result<
 }
 
 pub fn forward_inv(addr: &str, body: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+    if is_blocked(addr, state) {
+        return Ok(());
+    }
+
     let my_addr = state.lock().unwrap().addr.clone();
     let request = Request::post("/inv", &my_addr, addr, body.to_string());
     send_request(addr, request)?;
     Ok(())
+}
+
+pub fn get_proposal(addr: &str, round: u64, state: &Arc<Mutex<NodeState>>) -> Result<Proposal> {
+    if is_blocked(addr, state) {
+        return Err(Error::new(
+            ErrorKind::Other,
+            format!("peer {addr} is blocked"),
+        ));
+    }
+
+    let my_addr = state.lock().unwrap().addr.clone();
+    let request = Request::get(&format!("/consensus/proposal/{round}"), &my_addr, addr);
+    let response = send_request(addr, request)?;
+    if response.status != 200 {
+        return Err(Error::new(
+            ErrorKind::Other,
+            format!("proposal request failed with status {}", response.status),
+        ));
+    }
+
+    serde_json::from_str(&response.body).map_err(|e| Error::new(ErrorKind::InvalidData, e))
+}
+
+pub fn post_commit(addr: &str, commit: &Commit, state: &Arc<Mutex<NodeState>>) -> Result<Response> {
+    if is_blocked(addr, state) {
+        return Err(Error::new(
+            ErrorKind::Other,
+            format!("peer {addr} is blocked"),
+        ));
+    }
+
+    let my_addr = state.lock().unwrap().addr.clone();
+    let body = serde_json::to_string(commit).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+    let request = Request::post("/consensus/commit", &my_addr, addr, body);
+    send_request(addr, request)
+}
+
+pub fn get_ledger_status(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<Value> {
+    if is_blocked(addr, state) {
+        return Err(Error::new(
+            ErrorKind::Other,
+            format!("peer {addr} is blocked"),
+        ));
+    }
+
+    let my_addr = state.lock().unwrap().addr.clone();
+    let request = Request::get("/ledger/status", &my_addr, addr);
+    let response = send_request(addr, request)?;
+    if response.status != 200 {
+        return Err(Error::new(
+            ErrorKind::Other,
+            format!(
+                "ledger status request failed with status {}",
+                response.status
+            ),
+        ));
+    }
+
+    serde_json::from_str(&response.body).map_err(|e| Error::new(ErrorKind::InvalidData, e))
+}
+
+pub fn get_commits_from(
+    addr: &str,
+    from_round: u64,
+    state: &Arc<Mutex<NodeState>>,
+) -> Result<Vec<Commit>> {
+    if is_blocked(addr, state) {
+        return Err(Error::new(
+            ErrorKind::Other,
+            format!("peer {addr} is blocked"),
+        ));
+    }
+
+    let my_addr = state.lock().unwrap().addr.clone();
+    let request = Request::get(&format!("/consensus/commits/{from_round}"), &my_addr, addr);
+    let response = send_request(addr, request)?;
+    if response.status != 200 {
+        return Err(Error::new(
+            ErrorKind::Other,
+            format!("commits request failed with status {}", response.status),
+        ));
+    }
+
+    serde_json::from_str(&response.body).map_err(|e| Error::new(ErrorKind::InvalidData, e))
 }
