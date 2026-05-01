@@ -5,12 +5,14 @@ Prax2 experiment harness.
 Usage:
     python3 tests/test_prax2.py --divergence
     python3 tests/test_prax2.py --converge
+    python3 tests/test_prax2.py --load
     python3 tests/test_prax2.py ./target/release/peer-to-peer --converge
 """
 
 import argparse
 import json
 import os
+import random
 import subprocess
 import sys
 import tempfile
@@ -538,6 +540,112 @@ def test_partition(binary: str, base_port: int):
         stop_all()
 
 
+def test_load(binary: str, base_port: int, sizes, duration: int):
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    overall_results = []
+
+    log("Prax2 consensus load experiment")
+    log(f"binary={binary}")
+    log(f"sizes={sizes}")
+    log(f"duration_secs={duration}")
+
+    for index, node_count in enumerate(sizes):
+        ports = [base_port + 500 + (index * 100) + i for i in range(node_count)]
+        data_dir = f"/tmp/p2p-prax2-load-{run_id}-{node_count}"
+        posted = 0
+        start_time = None
+
+        log(f"\n[load size {node_count}]")
+        log(f"ports={ports[0]}..{ports[-1]}")
+        log(f"data_dir={data_dir}")
+
+        try:
+            start_consensus_cluster(binary, ports, data_dir)
+            log("waiting for peer discovery and empty consensus rounds...")
+            time.sleep(10)
+
+            start_time = time.time()
+            deadline = start_time + duration
+            while time.time() < deadline:
+                port = random.choice(ports)
+                body = f"load tx {posted + 1} from {port}"
+                post_tx(port, body)
+                posted += 1
+                time.sleep(0.25)
+
+            log(f"posted_transactions={posted}")
+
+            converged = False
+            convergence_secs = None
+            try:
+                snapshots = wait_same_ledger(ports, expected_len=posted, timeout=60)
+                convergence_secs = time.time() - start_time
+                converged = True
+            except AssertionError as error:
+                log(f"convergence_result=failed: {error}")
+                snapshots = {
+                    port: {"status": ledger_status(port), "ledger": ledger(port)}
+                    for port in ports
+                }
+
+            ledger_lengths = {
+                port: snapshots[port]["status"]["ledger_len"] for port in ports
+            }
+            ledger_hashes = {
+                snapshots[port]["status"]["ledger_hash"] for port in ports
+            }
+            commit_counts = {
+                port: snapshots[port]["status"]["commit_count"] for port in ports
+            }
+
+            log(f"converged={converged}")
+            if convergence_secs is not None:
+                log(f"convergence_secs={convergence_secs:.1f}")
+            log(f"ledger_lengths={ledger_lengths}")
+            log(f"unique_ledger_hashes={len(ledger_hashes)}")
+            log(f"commit_counts={commit_counts}")
+
+            overall_results.append(
+                {
+                    "node_count": node_count,
+                    "posted": posted,
+                    "converged": converged,
+                    "convergence_secs": convergence_secs,
+                    "min_ledger_len": min(ledger_lengths.values()),
+                    "max_ledger_len": max(ledger_lengths.values()),
+                    "unique_ledger_hashes": len(ledger_hashes),
+                }
+            )
+        finally:
+            stop_all()
+
+    log("\n[load summary]")
+    for result in overall_results:
+        log(json.dumps(result, sort_keys=True))
+
+    if not overall_results or not any(result["converged"] for result in overall_results):
+        raise AssertionError("load experiment did not produce any converged run")
+
+    log("RESULT: PASSED")
+
+
+def parse_load_sizes(value: str):
+    sizes = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        size = int(part)
+        if size < 1:
+            raise argparse.ArgumentTypeError("load sizes must be positive")
+        sizes.append(size)
+
+    if not sizes:
+        raise argparse.ArgumentTypeError("at least one load size is required")
+
+    return sizes
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Prax2 experiments")
     parser.add_argument("binary", nargs="?", default=DEFAULT_BINARY)
@@ -547,6 +655,13 @@ def parse_args():
     parser.add_argument("--invalid", action="store_true")
     parser.add_argument("--no-quorum", action="store_true")
     parser.add_argument("--partition", action="store_true")
+    parser.add_argument("--load", action="store_true")
+    parser.add_argument(
+        "--load-sizes",
+        type=parse_load_sizes,
+        default=parse_load_sizes("5,10,25,50"),
+    )
+    parser.add_argument("--load-duration", type=int, default=30)
     return parser.parse_args()
 
 
@@ -561,6 +676,7 @@ def main():
         or args.invalid
         or args.no_quorum
         or args.partition
+        or args.load
     )
     if args.divergence or not selected:
         test_divergence(args.binary, args.base_port)
@@ -577,6 +693,9 @@ def main():
     if args.partition:
         test_partition(args.binary, args.base_port)
         save_results("partition")
+    if args.load:
+        test_load(args.binary, args.base_port, args.load_sizes, args.load_duration)
+        save_results("load")
 
 
 if __name__ == "__main__":
