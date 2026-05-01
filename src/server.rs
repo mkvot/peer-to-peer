@@ -1,6 +1,6 @@
 use crate::http::read_request;
 use crate::routes::{
-    handle_addr, handle_announce, handle_get_blocks, handle_get_blocks_from,
+    handle_addr, handle_announce, handle_debug_faults, handle_get_blocks, handle_get_blocks_from,
     handle_get_consensus_commits, handle_get_consensus_proposal, handle_get_data,
     handle_get_ledger, handle_ledger_status, handle_not_found, handle_options, handle_ping,
     handle_post_block, handle_post_consensus_commit, handle_post_inv, handle_post_tx,
@@ -50,6 +50,7 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<
                 .unwrap_or(0);
             handle_get_consensus_commits(stream, state, from_round)
         }
+        ("POST", "/debug/faults") => handle_debug_faults(stream, state, request.body),
         ("GET", "/status") => handle_status(stream, state),
         ("OPTIONS", _) => handle_options(stream),
         _ => handle_not_found(stream),

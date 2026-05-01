@@ -349,10 +349,53 @@ pub fn handle_get_consensus_commits(
     reply(stream, 200, body)
 }
 
+pub fn handle_debug_faults(
+    stream: TcpStream,
+    state: Arc<Mutex<NodeState>>,
+    body: String,
+) -> Result<()> {
+    let json: Value = serde_json::from_str(&body).map_err(|e| Error::new(ErrorKind::Other, e))?;
+
+    let status = {
+        let mut node = state.lock().unwrap();
+
+        if let Some(enabled) = json
+            .get("forward_inv_enabled")
+            .and_then(|value| value.as_bool())
+        {
+            node.forward_inv_enabled = enabled;
+        }
+
+        if let Some(peer) = json.get("block_peer").and_then(|value| value.as_str()) {
+            if peer != node.addr {
+                node.blocked_peers.insert(peer.to_string());
+            }
+        }
+
+        if let Some(peer) = json.get("unblock_peer").and_then(|value| value.as_str()) {
+            node.blocked_peers.remove(peer);
+        }
+
+        serde_json::json!({
+            "status": "ok",
+            "forward_inv_enabled": node.forward_inv_enabled,
+            "blocked_peers": sorted_blocked_peers(&node),
+        })
+    };
+
+    reply(stream, 200, status.to_string())
+}
+
 pub fn handle_status(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
     let node = state.lock().unwrap();
     let body = ledger_status_json(&node).to_string();
     reply(stream, 200, body)
+}
+
+fn sorted_blocked_peers(node: &NodeState) -> Vec<String> {
+    let mut peers: Vec<String> = node.blocked_peers.iter().cloned().collect();
+    peers.sort();
+    peers
 }
 
 fn is_conflict_error(error: &str) -> bool {

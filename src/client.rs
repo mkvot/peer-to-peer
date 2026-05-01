@@ -87,6 +87,13 @@ fn is_blocked(addr: &str, state: &Arc<Mutex<NodeState>>) -> bool {
 }
 
 fn ping(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+    if is_blocked(addr, state) {
+        return Err(Error::new(
+            ErrorKind::Other,
+            format!("peer {addr} is blocked"),
+        ));
+    }
+
     let my_addr = state.lock().unwrap().addr.clone();
 
     let request = Request::get("/ping", &my_addr, addr);
@@ -102,6 +109,10 @@ fn ping(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
 }
 
 fn announce(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+    if is_blocked(addr, state) {
+        return Ok(());
+    }
+
     let my_addr = state.lock().unwrap().addr.clone();
     let body = format!(r#"{{"address": "{}"}}"#, my_addr);
 
@@ -121,6 +132,10 @@ fn announce(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
 }
 
 fn sync_peers(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+    if is_blocked(addr, state) {
+        return Ok(());
+    }
+
     let my_addr = state.lock().unwrap().addr.clone();
 
     let request = Request::get("/addr", &my_addr, addr);
@@ -188,6 +203,10 @@ pub fn forward_block(addr: &str, body: &str, state: &Arc<Mutex<NodeState>>) -> R
 }
 
 fn sync_blocks(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
+    if is_blocked(addr, state) {
+        return Ok(());
+    }
+
     let my_addr = state.lock().unwrap().addr.clone();
 
     let request = Request::get("/getblocks", &my_addr, addr);
@@ -208,6 +227,10 @@ fn sync_blocks(addr: &str, state: &Arc<Mutex<NodeState>>) -> Result<()> {
 }
 
 fn get_block(addr: &str, state: &Arc<Mutex<NodeState>>, hash: String) -> Result<()> {
+    if is_blocked(addr, state) {
+        return Ok(());
+    }
+
     let my_addr = state.lock().unwrap().addr.clone();
 
     let request = Request::get(&format!("/getdata/{hash}"), &my_addr, addr);
