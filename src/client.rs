@@ -62,16 +62,21 @@ pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
 fn send_request(addr: &str, request: Request) -> Result<Response> {
     let mut stream = TcpStream::connect(addr)?;
 
-    let headers = if request.headers.is_empty() {
-        String::new()
+    let msg = if request.headers.is_empty() {
+        format!(
+            "{} {} {}\r\n\r\n{}",
+            request.method, request.path, request.version, request.body
+        )
     } else {
-        format!("{}\r\n", request.headers.join("\r\n"))
+        format!(
+            "{} {} {}\r\n{}\r\n\r\n{}",
+            request.method,
+            request.path,
+            request.version,
+            request.headers.join("\r\n"),
+            request.body
+        )
     };
-
-    let msg = format!(
-        "{} {} {}\r\n{}\r\n\r\n{}",
-        request.method, request.path, request.version, headers, request.body
-    );
 
     stream.write_all(msg.as_bytes())?;
     read_response(&mut stream)

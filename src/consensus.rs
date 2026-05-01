@@ -7,17 +7,30 @@ use std::{
 };
 
 use crate::{
+    client::{get_commits_from, get_ledger_status, get_proposal, post_commit},
     crypto::commit_hash,
     ledger,
     models::{Commit, CommitPayload, Proposal, Transaction},
     state::NodeState,
+    storage::persist_commit,
 };
 
 pub fn start_consensus_loop(state: Arc<Mutex<NodeState>>) -> io::Result<()> {
     thread::spawn(move || {
         loop {
-            let round_secs = state.lock().unwrap().round_secs;
+            let (round_secs, enabled) = {
+                let node = state.lock().unwrap();
+                (node.round_secs, node.consensus_enabled)
+            };
             thread::sleep(Duration::from_secs(round_secs));
+
+            if !enabled {
+                continue;
+            }
+
+            if let Err(e) = run_consensus_tick(&state) {
+                println!("consensus tick failed: {e}");
+            }
         }
     });
     Ok(())
@@ -178,6 +191,196 @@ pub fn sort_transactions(txs: &mut [Transaction]) {
             .then(a.seq.cmp(&b.seq))
             .then(a.id.cmp(&b.id))
     });
+}
+
+fn run_consensus_tick(state: &Arc<Mutex<NodeState>>) -> Result<(), String> {
+    let snapshot = {
+        let node = state.lock().unwrap();
+        let members = build_members(&node);
+        let round = node.next_round;
+        let leader = expected_leader(&members, round);
+        (
+            node.addr.clone(),
+            round,
+            node.ledger_hash.clone(),
+            members,
+            leader,
+        )
+    };
+
+    let (addr, round, ledger_hash, members, leader) = snapshot;
+    let Some(leader) = leader else {
+        return Ok(());
+    };
+
+    if addr != leader {
+        catch_up_from_peers(state)?;
+        return Ok(());
+    }
+
+    println!("consensus round {round}: leader {addr}, members {members:?}");
+    run_leader_round(state, round, ledger_hash, members, addr)
+}
+
+fn run_leader_round(
+    state: &Arc<Mutex<NodeState>>,
+    round: u64,
+    ledger_hash: String,
+    members: Vec<String>,
+    leader: String,
+) -> Result<(), String> {
+    let mut proposals = Vec::new();
+    {
+        let node = state.lock().unwrap();
+        proposals.push(build_proposal(&node, round));
+    }
+
+    for member in &members {
+        if member == &leader {
+            continue;
+        }
+
+        match get_proposal(member, round, state) {
+            Ok(proposal) if proposal.round == round && proposal.ledger_hash == ledger_hash => {
+                proposals.push(proposal);
+            }
+            Ok(proposal) => {
+                println!(
+                    "consensus round {round}: ignored proposal from {} at round {} hash {}",
+                    proposal.addr, proposal.round, proposal.ledger_hash
+                );
+            }
+            Err(e) => {
+                println!("consensus round {round}: failed to get proposal from {member}: {e}");
+            }
+        }
+    }
+
+    let needed = quorum(members.len());
+    if proposals.len() < needed {
+        println!(
+            "consensus round {round}: no quorum, got {} need {needed}",
+            proposals.len()
+        );
+        return Ok(());
+    }
+
+    let committed_ids = state.lock().unwrap().ledger_ids.clone();
+    let mut seen = HashSet::new();
+    let mut txs = Vec::new();
+    for proposal in &proposals {
+        for tx in &proposal.pending {
+            if committed_ids.contains(&tx.id) || !seen.insert(tx.id.clone()) {
+                continue;
+            }
+            validate_transaction(tx)?;
+            txs.push(tx.clone());
+        }
+    }
+    sort_transactions(&mut txs);
+
+    if txs.is_empty() {
+        println!("consensus round {round}: quorum reached but no pending transactions");
+        return Ok(());
+    }
+
+    let votes: Vec<String> = proposals
+        .iter()
+        .map(|proposal| proposal.addr.clone())
+        .collect();
+    let commit = build_commit(CommitPayload {
+        round,
+        prev_ledger_hash: ledger_hash,
+        leader: leader.clone(),
+        members: members.clone(),
+        votes,
+        txs,
+    });
+    let commit_hash = commit.commit_hash.clone();
+    let tx_count = commit.payload.txs.len();
+
+    {
+        let mut node = state.lock().unwrap();
+        apply_commit(&mut node, commit.clone())?;
+        persist_commit(&node, &commit).map_err(|e| e.to_string())?;
+    }
+
+    println!("consensus round {round}: committed {tx_count} txs as {commit_hash}");
+
+    for member in members {
+        if member == leader {
+            continue;
+        }
+        match post_commit(&member, &commit, state) {
+            Ok(response) if response.status == 200 => {}
+            Ok(response) => {
+                println!(
+                    "consensus round {round}: peer {member} rejected commit with {} {}",
+                    response.status, response.body
+                );
+            }
+            Err(e) => {
+                println!("consensus round {round}: failed to post commit to {member}: {e}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn catch_up_from_peers(state: &Arc<Mutex<NodeState>>) -> Result<(), String> {
+    let (addr, peers, local_next_round) = {
+        let node = state.lock().unwrap();
+        (node.addr.clone(), build_members(&node), node.next_round)
+    };
+
+    for peer in peers {
+        if peer == addr {
+            continue;
+        }
+
+        let Ok(status) = get_ledger_status(&peer, state) else {
+            continue;
+        };
+        let peer_next_round = status
+            .get("next_round")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+        if peer_next_round <= local_next_round {
+            continue;
+        }
+
+        let commits =
+            get_commits_from(&peer, local_next_round, state).map_err(|e| e.to_string())?;
+        if commits.is_empty() {
+            continue;
+        }
+
+        println!(
+            "consensus catch-up: applying {} commits from {peer}",
+            commits.len()
+        );
+        for commit in commits {
+            let mut node = state.lock().unwrap();
+            let before_next_round = node.next_round;
+            match apply_commit(&mut node, commit.clone()) {
+                Ok(()) => {
+                    if node.next_round > before_next_round {
+                        persist_commit(&node, &commit).map_err(|e| e.to_string())?;
+                    }
+                }
+                Err(e) => {
+                    println!(
+                        "consensus catch-up: stopped at round {} from {peer}: {e}",
+                        commit.payload.round
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn is_sorted_unique(values: &[String]) -> bool {

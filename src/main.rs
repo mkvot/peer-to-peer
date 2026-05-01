@@ -49,6 +49,10 @@ fn main() -> Result<()> {
         client::start(client_state).unwrap();
     });
 
+    if state.lock().unwrap().consensus_enabled {
+        consensus::start_consensus_loop(state.clone())?;
+    }
+
     let server_state = state.clone();
     server::start(server_state)?;
     Ok(())
