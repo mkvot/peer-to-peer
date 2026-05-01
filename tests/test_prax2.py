@@ -5,6 +5,7 @@ Prax2 experiment harness.
 Usage:
     python3 tests/test_prax2.py --divergence
     python3 tests/test_prax2.py --converge
+    python3 tests/test_prax2.py --leader-failure
     python3 tests/test_prax2.py --load
     python3 tests/test_prax2.py ./target/release/peer-to-peer --converge
 """
@@ -193,6 +194,22 @@ def stop_all():
     peers_files.clear()
 
 
+def stop_node_by_port(port: int):
+    for proc, proc_port in processes[:]:
+        if proc_port != port:
+            continue
+
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        processes.remove((proc, proc_port))
+        return
+
+    raise RuntimeError(f"node {port} is not managed by this test run")
+
+
 def snapshot_ledgers(ports, label: str):
     log(f"\n[{label}]")
     snapshots = {}
@@ -207,6 +224,13 @@ def snapshot_ledgers(ports, label: str):
             f"forward_inv={stat['forward_inv_enabled']} txs={bodies}"
         )
     return snapshots
+
+
+def expected_leader_from_status(stat):
+    members = sorted(set([stat["addr"]] + stat["peers"]))
+    if not members:
+        return None
+    return members[stat["next_round"] % len(members)]
 
 
 def start_consensus_cluster(binary: str, ports, data_dir: str, round_secs="2"):
@@ -384,6 +408,70 @@ def test_converge(binary: str, base_port: int):
         rounds = {port: snapshots[port]["status"]["next_round"] for port in ports}
         log(f"\nconverged ledger hash={next(iter(hashes))}")
         log(f"next_round_by_port={rounds}")
+        log("RESULT: PASSED")
+    finally:
+        stop_all()
+
+
+def test_leader_failure(binary: str, base_port: int):
+    ports = [base_port + 150 + i for i in range(5)]
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    data_dir = f"/tmp/p2p-prax2-leader-failure-{run_id}"
+
+    log("Prax2 leader-failure experiment")
+    log(f"binary={binary}")
+    log(f"ports={ports}")
+    log(f"data_dir={data_dir}")
+
+    try:
+        start_consensus_cluster(binary, ports, data_dir)
+        log("waiting for peer discovery and empty consensus rounds...")
+        time.sleep(10)
+        initial = snapshot_ledgers(ports, "initial")
+
+        leaders = {
+            port: expected_leader_from_status(initial[port]["status"])
+            for port in ports
+        }
+        leader_addr = leaders[ports[0]]
+        leader_port = int(leader_addr.rsplit(":", 1)[1])
+        log(f"next_leader_by_port={leaders}")
+        log(f"killing expected leader :{leader_port}")
+
+        stop_node_by_port(leader_port)
+        survivors = [port for port in ports if port != leader_port]
+
+        log("waiting longer than one peer-maintenance tick after leader kill...")
+        time.sleep(10)
+
+        posted = []
+        for port in survivors[:3]:
+            tx = post_tx(port, f"leader failure tx from {port}")
+            posted.append(tx["id"])
+            log(f"posted tx to survivor :{port}: {tx['id']}")
+
+        time.sleep(18)
+        snapshots = snapshot_ledgers(survivors, "after leader failure")
+        hashes = {snapshots[port]["status"]["ledger_hash"] for port in survivors}
+        lengths = {snapshots[port]["status"]["ledger_len"] for port in survivors}
+        rounds = {port: snapshots[port]["status"]["next_round"] for port in survivors}
+        commit_counts = {port: snapshots[port]["status"]["commit_count"] for port in survivors}
+        mempools = {port: snapshots[port]["status"]["mempool_count"] for port in survivors}
+
+        recovered = len(hashes) == 1 and min(lengths) >= len(posted)
+        if recovered:
+            result = "recovered"
+        elif max(lengths) == 0 and max(mempools.values()) > 0:
+            result = "stalled"
+        else:
+            result = "partial_progress"
+
+        log(f"\nleader_failure_result={result}")
+        log(f"survivor_hashes={hashes}")
+        log(f"survivor_lengths={lengths}")
+        log(f"survivor_next_rounds={rounds}")
+        log(f"survivor_commit_counts={commit_counts}")
+        log(f"survivor_mempools={mempools}")
         log("RESULT: PASSED")
     finally:
         stop_all()
@@ -674,6 +762,7 @@ def parse_args():
     parser.add_argument("--base-port", type=int, default=DEFAULT_BASE_PORT)
     parser.add_argument("--divergence", action="store_true")
     parser.add_argument("--converge", action="store_true")
+    parser.add_argument("--leader-failure", action="store_true")
     parser.add_argument("--invalid", action="store_true")
     parser.add_argument("--no-quorum", action="store_true")
     parser.add_argument("--partition", action="store_true")
@@ -695,6 +784,7 @@ def main():
     selected = (
         args.divergence
         or args.converge
+        or args.leader_failure
         or args.invalid
         or args.no_quorum
         or args.partition
@@ -706,6 +796,9 @@ def main():
     if args.converge:
         test_converge(args.binary, args.base_port)
         save_results("converge")
+    if args.leader_failure:
+        test_leader_failure(args.binary, args.base_port)
+        save_results("leader_failure")
     if args.invalid:
         test_invalid(args.binary, args.base_port)
         save_results("invalid")
