@@ -3,8 +3,9 @@
 Prax2 experiment harness.
 
 Usage:
-    python3 test_prax2.py --divergence
-    python3 test_prax2.py ./target/release/peer-to-peer --divergence
+    python3 tests/test_prax2.py --divergence
+    python3 tests/test_prax2.py --converge
+    python3 tests/test_prax2.py ./target/release/peer-to-peer --converge
 """
 
 import argparse
@@ -89,18 +90,41 @@ def post_tx(port: int, body: str):
     return payload["tx"]
 
 
-def wait_for_node(port: int, timeout=8):
+def wait_for_node(
+    port: int,
+    timeout=8,
+    proc=None,
+    expected_data_dir=None,
+    expected_consensus=None,
+):
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if status(port):
+        if proc is not None and proc.poll() is not None:
+            raise RuntimeError(f"node {port} exited early with code {proc.returncode}")
+
+        stat = status(port)
+        if stat:
+            if expected_data_dir is not None:
+                expected_node_dir = str(Path(expected_data_dir) / str(port))
+                if stat.get("data_dir") != expected_node_dir:
+                    time.sleep(0.2)
+                    continue
+            if expected_consensus is not None and stat.get("consensus_enabled") != expected_consensus:
+                time.sleep(0.2)
+                continue
             return
         time.sleep(0.2)
     raise RuntimeError(f"node {port} did not start")
 
 
-def wait_for_all(ports, timeout=8):
+def wait_for_all(ports, timeout=8, expected_data_dir=None, expected_consensus=None):
     for port in ports:
-        wait_for_node(port, timeout=timeout)
+        wait_for_node(
+            port,
+            timeout=timeout,
+            expected_data_dir=expected_data_dir,
+            expected_consensus=expected_consensus,
+        )
 
 
 def start_node(binary: str, port: int, peers=None, env_overrides=None):
@@ -163,6 +187,44 @@ def snapshot_ledgers(ports, label: str):
     return snapshots
 
 
+def wait_same_ledger(ports, expected_len=None, timeout=35):
+    deadline = time.time() + timeout
+    last_snapshots = None
+
+    while time.time() < deadline:
+        try:
+            snapshots = {
+                port: {"status": ledger_status(port), "ledger": ledger(port)}
+                for port in ports
+            }
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+            time.sleep(0.5)
+            continue
+
+        last_snapshots = snapshots
+        hashes = {snapshots[port]["status"]["ledger_hash"] for port in ports}
+        ledgers = {json.dumps(snapshots[port]["ledger"], sort_keys=True) for port in ports}
+        lengths = {snapshots[port]["status"]["ledger_len"] for port in ports}
+
+        expected_reached = expected_len is None or lengths == {expected_len}
+        if len(hashes) == 1 and len(ledgers) == 1 and expected_reached:
+            return snapshots
+
+        time.sleep(0.5)
+
+    if last_snapshots is not None:
+        log("\n[last convergence snapshot]")
+        for port, snapshot in last_snapshots.items():
+            stat = snapshot["status"]
+            bodies = [tx["body"] for tx in snapshot["ledger"]]
+            log(
+                f":{port} len={stat['ledger_len']} hash={stat['ledger_hash']} "
+                f"round={stat['next_round']} txs={bodies}"
+            )
+
+    raise AssertionError("nodes did not converge to the same ledger before timeout")
+
+
 def test_divergence(binary: str, base_port: int):
     ports = [base_port + i for i in range(3)]
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -180,12 +242,22 @@ def test_divergence(binary: str, base_port: int):
     log(f"data_dir={data_dir}")
 
     try:
-        start_node(binary, ports[0], env_overrides=env)
-        wait_for_node(ports[0])
+        proc = start_node(binary, ports[0], env_overrides=env)
+        wait_for_node(
+            ports[0],
+            proc=proc,
+            expected_data_dir=data_dir,
+            expected_consensus=False,
+        )
 
         for port in ports[1:]:
-            start_node(binary, port, peers=[ports[0]], env_overrides=env)
-            wait_for_node(port)
+            proc = start_node(binary, port, peers=[ports[0]], env_overrides=env)
+            wait_for_node(
+                port,
+                proc=proc,
+                expected_data_dir=data_dir,
+                expected_consensus=False,
+            )
 
         time.sleep(1)
         snapshot_ledgers(ports, "initial")
@@ -210,11 +282,68 @@ def test_divergence(binary: str, base_port: int):
         stop_all()
 
 
+def test_converge(binary: str, base_port: int):
+    ports = [base_port + 100 + i for i in range(5)]
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    data_dir = f"/tmp/p2p-prax2-converge-{run_id}"
+    env = {
+        "P2P_CONSENSUS": "1",
+        "P2P_FORWARD_INV": "0",
+        "P2P_DATA_DIR": data_dir,
+        "P2P_ROUND_SECS": "2",
+    }
+
+    log("Prax2 consensus convergence experiment")
+    log(f"binary={binary}")
+    log(f"ports={ports}")
+    log(f"data_dir={data_dir}")
+
+    try:
+        proc = start_node(binary, ports[0], env_overrides=env)
+        wait_for_node(
+            ports[0],
+            proc=proc,
+            expected_data_dir=data_dir,
+            expected_consensus=True,
+        )
+
+        for port in ports[1:]:
+            proc = start_node(binary, port, peers=[ports[0]], env_overrides=env)
+            wait_for_node(
+                port,
+                proc=proc,
+                expected_data_dir=data_dir,
+                expected_consensus=True,
+            )
+            time.sleep(0.2)
+
+        wait_for_all(ports, expected_data_dir=data_dir, expected_consensus=True)
+        log("waiting for peer discovery and empty consensus rounds...")
+        time.sleep(10)
+        snapshot_ledgers(ports, "initial")
+
+        for port in ports[:3]:
+            tx = post_tx(port, f"convergence transaction from {port}")
+            log(f"posted tx to :{port}: {tx['id']}")
+
+        snapshots = wait_same_ledger(ports, expected_len=3, timeout=40)
+        snapshot_ledgers(ports, "after convergence")
+
+        hashes = {snapshots[port]["status"]["ledger_hash"] for port in ports}
+        rounds = {port: snapshots[port]["status"]["next_round"] for port in ports}
+        log(f"\nconverged ledger hash={next(iter(hashes))}")
+        log(f"next_round_by_port={rounds}")
+        log("RESULT: PASSED")
+    finally:
+        stop_all()
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Prax2 experiments")
     parser.add_argument("binary", nargs="?", default=DEFAULT_BINARY)
     parser.add_argument("--base-port", type=int, default=DEFAULT_BASE_PORT)
     parser.add_argument("--divergence", action="store_true")
+    parser.add_argument("--converge", action="store_true")
     return parser.parse_args()
 
 
@@ -223,10 +352,13 @@ def main():
     if not os.path.exists(args.binary):
         raise SystemExit(f"binary not found: {args.binary}; run cargo build first")
 
-    selected = args.divergence
+    selected = args.divergence or args.converge
     if args.divergence or not selected:
         test_divergence(args.binary, args.base_port)
         save_results("divergence")
+    if args.converge:
+        test_converge(args.binary, args.base_port)
+        save_results("converge")
 
 
 if __name__ == "__main__":
