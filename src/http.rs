@@ -38,6 +38,19 @@ impl Request {
         Self::new("POST", path, my_addr, addr).with_body(body)
     }
 
+    pub fn to_http_bytes(&self) -> Vec<u8> {
+        let mut message = format!("{} {} {}\r\n", self.method, self.path, self.version);
+
+        for header in &self.headers {
+            message.push_str(header);
+            message.push_str("\r\n");
+        }
+
+        message.push_str("\r\n");
+        message.push_str(&self.body);
+        message.into_bytes()
+    }
+
     pub fn node_addr(&self) -> Option<&str> {
         self.headers
             .iter()
