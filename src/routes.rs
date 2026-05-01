@@ -202,8 +202,16 @@ pub fn handle_post_inv(
 
     let (status, should_forward, peers) = {
         let mut node = state.lock().unwrap();
-        let result =
-            ingest_transaction(&mut node, tx).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+        let result = match ingest_transaction(&mut node, tx) {
+            Ok(result) => result,
+            Err(e) => {
+                return reply(
+                    stream,
+                    400,
+                    serde_json::json!({ "error": format!("invalid transaction: {e}") }).to_string(),
+                );
+            }
+        };
 
         if !node.consensus_enabled && result == IngestResult::Accepted {
             write_ledger(&node)?;

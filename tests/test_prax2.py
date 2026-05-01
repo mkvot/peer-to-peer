@@ -65,6 +65,15 @@ def request(method: str, port: int, path: str, body=None):
         return response.status, json.loads(raw) if raw else None
 
 
+def request_allow_error(method: str, port: int, path: str, body=None):
+    try:
+        return request(method, port, path, body)
+    except urllib.error.HTTPError as error:
+        raw = error.read().decode()
+        payload = json.loads(raw) if raw else None
+        return error.code, payload
+
+
 def status(port: int):
     try:
         _, payload = request("GET", port, "/status")
@@ -88,6 +97,17 @@ def post_tx(port: int, body: str):
     if status_code != 200:
         raise RuntimeError(f"POST /tx on {port} returned {status_code}: {payload}")
     return payload["tx"]
+
+
+def post_inv_raw(port: int, payload):
+    return request_allow_error("POST", port, "/inv", payload)
+
+
+def set_fault(port: int, payload):
+    status_code, response = request("POST", port, "/debug/faults", payload)
+    if status_code != 200:
+        raise RuntimeError(f"POST /debug/faults on {port} returned {status_code}: {response}")
+    return response
 
 
 def wait_for_node(
@@ -185,6 +205,36 @@ def snapshot_ledgers(ports, label: str):
             f"forward_inv={stat['forward_inv_enabled']} txs={bodies}"
         )
     return snapshots
+
+
+def start_consensus_cluster(binary: str, ports, data_dir: str, round_secs="2"):
+    env = {
+        "P2P_CONSENSUS": "1",
+        "P2P_FORWARD_INV": "0",
+        "P2P_DATA_DIR": data_dir,
+        "P2P_ROUND_SECS": round_secs,
+    }
+
+    proc = start_node(binary, ports[0], env_overrides=env)
+    wait_for_node(
+        ports[0],
+        proc=proc,
+        expected_data_dir=data_dir,
+        expected_consensus=True,
+    )
+
+    for port in ports[1:]:
+        proc = start_node(binary, port, peers=[ports[0]], env_overrides=env)
+        wait_for_node(
+            port,
+            proc=proc,
+            expected_data_dir=data_dir,
+            expected_consensus=True,
+        )
+        time.sleep(0.2)
+
+    wait_for_all(ports, expected_data_dir=data_dir, expected_consensus=True)
+    return env
 
 
 def wait_same_ledger(ports, expected_len=None, timeout=35):
@@ -299,25 +349,7 @@ def test_converge(binary: str, base_port: int):
     log(f"data_dir={data_dir}")
 
     try:
-        proc = start_node(binary, ports[0], env_overrides=env)
-        wait_for_node(
-            ports[0],
-            proc=proc,
-            expected_data_dir=data_dir,
-            expected_consensus=True,
-        )
-
-        for port in ports[1:]:
-            proc = start_node(binary, port, peers=[ports[0]], env_overrides=env)
-            wait_for_node(
-                port,
-                proc=proc,
-                expected_data_dir=data_dir,
-                expected_consensus=True,
-            )
-            time.sleep(0.2)
-
-        wait_for_all(ports, expected_data_dir=data_dir, expected_consensus=True)
+        start_consensus_cluster(binary, ports, data_dir)
         log("waiting for peer discovery and empty consensus rounds...")
         time.sleep(10)
         snapshot_ledgers(ports, "initial")
@@ -338,12 +370,183 @@ def test_converge(binary: str, base_port: int):
         stop_all()
 
 
+def test_invalid(binary: str, base_port: int):
+    ports = [base_port + 200 + i for i in range(3)]
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    data_dir = f"/tmp/p2p-prax2-invalid-{run_id}"
+    invalid_body = "invalid transaction should not commit"
+
+    log("Prax2 invalid transaction experiment")
+    log(f"binary={binary}")
+    log(f"ports={ports}")
+    log(f"data_dir={data_dir}")
+
+    try:
+        start_consensus_cluster(binary, ports, data_dir)
+        time.sleep(6)
+        snapshot_ledgers(ports, "initial")
+
+        invalid_tx = {
+            "id": "not-the-real-id",
+            "origin": addr(ports[0]),
+            "seq": 1,
+            "body": invalid_body,
+        }
+        status_code, response = post_inv_raw(ports[1], invalid_tx)
+        log(f"posted invalid /inv to :{ports[1]} status={status_code} response={response}")
+
+        valid_tx = post_tx(ports[0], "valid transaction after invalid inv")
+        log(f"posted valid tx to :{ports[0]}: {valid_tx['id']}")
+
+        snapshots = wait_same_ledger(ports, expected_len=1, timeout=35)
+        snapshot_ledgers(ports, "after consensus")
+
+        for port, snapshot in snapshots.items():
+            bodies = [tx["body"] for tx in snapshot["ledger"]]
+            if invalid_body in bodies:
+                raise AssertionError(f"invalid transaction committed on {port}")
+
+        log("RESULT: PASSED")
+    finally:
+        stop_all()
+
+
+def test_no_quorum(binary: str, base_port: int):
+    port = base_port + 300
+    phantom_ports = [port + i for i in range(1, 5)]
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    data_dir = f"/tmp/p2p-prax2-no-quorum-{run_id}"
+    env = {
+        "P2P_CONSENSUS": "1",
+        "P2P_FORWARD_INV": "0",
+        "P2P_DATA_DIR": data_dir,
+        "P2P_ROUND_SECS": "2",
+    }
+
+    log("Prax2 no-quorum experiment")
+    log(f"binary={binary}")
+    log(f"port={port}")
+    log(f"phantom_peers={phantom_ports}")
+    log(f"data_dir={data_dir}")
+
+    try:
+        proc = start_node(binary, port, peers=phantom_ports, env_overrides=env)
+        wait_for_node(
+            port,
+            proc=proc,
+            expected_data_dir=data_dir,
+            expected_consensus=True,
+        )
+
+        tx = post_tx(port, "transaction without reachable quorum")
+        log(f"posted tx to :{port}: {tx['id']}")
+
+        time.sleep(5)
+        stat = ledger_status(port)
+        entries = ledger(port)
+        log(
+            f":{port} len={stat['ledger_len']} hash={stat['ledger_hash']} "
+            f"mempool={stat['mempool_count']} next_round={stat['next_round']} "
+            f"peers={stat['peers']}"
+        )
+
+        if stat["ledger_len"] != 0 or entries:
+            raise AssertionError("node committed despite lacking reachable quorum")
+        if stat["mempool_count"] != 1:
+            raise AssertionError("pending transaction left the mempool without a commit")
+
+        log("RESULT: PASSED")
+    finally:
+        stop_all()
+
+
+def test_partition(binary: str, base_port: int):
+    group_a = [base_port + 400 + i for i in range(3)]
+    group_b = [base_port + 410 + i for i in range(2)]
+    ports = group_a + group_b
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    data_dir = f"/tmp/p2p-prax2-partition-{run_id}"
+    env = {
+        "P2P_CONSENSUS": "1",
+        "P2P_FORWARD_INV": "0",
+        "P2P_DATA_DIR": data_dir,
+        "P2P_ROUND_SECS": "2",
+    }
+
+    log("Prax2 partition experiment")
+    log(f"binary={binary}")
+    log(f"group_a={group_a}")
+    log(f"group_b={group_b}")
+    log(f"data_dir={data_dir}")
+
+    try:
+        proc = start_node(binary, group_a[0], env_overrides=env)
+        wait_for_node(
+            group_a[0],
+            proc=proc,
+            expected_data_dir=data_dir,
+            expected_consensus=True,
+        )
+        for port in group_a[1:]:
+            proc = start_node(binary, port, peers=[group_a[0]], env_overrides=env)
+            wait_for_node(
+                port,
+                proc=proc,
+                expected_data_dir=data_dir,
+                expected_consensus=True,
+            )
+
+        proc = start_node(binary, group_b[0], env_overrides=env)
+        wait_for_node(
+            group_b[0],
+            proc=proc,
+            expected_data_dir=data_dir,
+            expected_consensus=True,
+        )
+        for port in group_b[1:]:
+            proc = start_node(binary, port, peers=[group_b[0]], env_overrides=env)
+            wait_for_node(
+                port,
+                proc=proc,
+                expected_data_dir=data_dir,
+                expected_consensus=True,
+            )
+
+        log("waiting for peer discovery inside each partition...")
+        time.sleep(8)
+        snapshot_ledgers(ports, "initial partitions")
+
+        tx_a = post_tx(group_a[0], "partition A transaction")
+        tx_b = post_tx(group_b[0], "partition B transaction")
+        log(f"posted tx to partition A :{group_a[0]}: {tx_a['id']}")
+        log(f"posted tx to partition B :{group_b[0]}: {tx_b['id']}")
+
+        snapshots_a = wait_same_ledger(group_a, expected_len=1, timeout=30)
+        snapshots_b = wait_same_ledger(group_b, expected_len=1, timeout=30)
+        snapshot_ledgers(ports, "after partitioned consensus")
+
+        hash_a = next(iter({snapshots_a[port]["status"]["ledger_hash"] for port in group_a}))
+        hash_b = next(iter({snapshots_b[port]["status"]["ledger_hash"] for port in group_b}))
+        log(f"\npartition_a_hash={hash_a}")
+        log(f"partition_b_hash={hash_b}")
+
+        if hash_a == hash_b:
+            raise AssertionError("partitioned groups unexpectedly produced the same ledger hash")
+
+        log("RESULT: PASSED")
+    finally:
+        stop_all()
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Prax2 experiments")
     parser.add_argument("binary", nargs="?", default=DEFAULT_BINARY)
     parser.add_argument("--base-port", type=int, default=DEFAULT_BASE_PORT)
     parser.add_argument("--divergence", action="store_true")
     parser.add_argument("--converge", action="store_true")
+    parser.add_argument("--invalid", action="store_true")
+    parser.add_argument("--no-quorum", action="store_true")
+    parser.add_argument("--partition", action="store_true")
     return parser.parse_args()
 
 
@@ -352,13 +555,28 @@ def main():
     if not os.path.exists(args.binary):
         raise SystemExit(f"binary not found: {args.binary}; run cargo build first")
 
-    selected = args.divergence or args.converge
+    selected = (
+        args.divergence
+        or args.converge
+        or args.invalid
+        or args.no_quorum
+        or args.partition
+    )
     if args.divergence or not selected:
         test_divergence(args.binary, args.base_port)
         save_results("divergence")
     if args.converge:
         test_converge(args.binary, args.base_port)
         save_results("converge")
+    if args.invalid:
+        test_invalid(args.binary, args.base_port)
+        save_results("invalid")
+    if args.no_quorum:
+        test_no_quorum(args.binary, args.base_port)
+        save_results("no_quorum")
+    if args.partition:
+        test_partition(args.binary, args.base_port)
+        save_results("partition")
 
 
 if __name__ == "__main__":
