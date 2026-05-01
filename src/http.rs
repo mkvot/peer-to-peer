@@ -73,7 +73,6 @@ impl Default for Request {
 
 pub struct Response {
     pub status: u16,
-    pub headers: Vec<String>,
     pub body: String,
 }
 
@@ -111,11 +110,8 @@ pub fn parse_response(buf: &[u8]) -> Response {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    let headers: Vec<String> = lines.map(|x| x.to_string()).collect();
-
     Response {
         status,
-        headers,
         body: body.to_string(),
     }
 }
