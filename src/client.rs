@@ -15,10 +15,12 @@ use crate::{
 };
 
 pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
-    let node = state.lock().unwrap().clone();
-    let addr = node.addr.clone();
+    let (addr, initial_peers) = {
+        let node = state.lock().unwrap();
+        (node.addr.clone(), node.peers.clone())
+    };
 
-    for peer in node.peers.iter() {
+    for peer in initial_peers.iter() {
         if peer == &addr {
             continue;
         };

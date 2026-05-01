@@ -25,7 +25,7 @@ pub fn handle_ping(stream: TcpStream, request: Request) -> Result<()> {
 }
 
 pub fn handle_addr(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
-    let peers = state.lock().unwrap().clone().peers;
+    let peers = state.lock().unwrap().peers.clone();
     let peers_json = serde_json::to_string(&peers).map_err(|e| Error::new(ErrorKind::Other, e))?;
     reply(stream, 200, peers_json)
 }
