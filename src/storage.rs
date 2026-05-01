@@ -61,12 +61,16 @@ fn rebuild_from_commits(state: &mut NodeState, commits: Vec<Commit>) -> io::Resu
     state.commits.clear();
     state.ledger_hash = GENESIS_LEDGER_HASH.to_string();
     state.next_round = 0;
+    state.local_seq = 0;
 
     for commit in commits {
         validate_stored_commit(state, &commit)?;
 
         for tx in &commit.payload.txs {
             if state.ledger_ids.insert(tx.id.clone()) {
+                if tx.origin == state.addr {
+                    state.local_seq = state.local_seq.max(tx.seq);
+                }
                 state.ledger.push(tx.clone());
             }
         }
@@ -93,6 +97,7 @@ mod tests {
     use crate::{
         consensus::build_commit,
         crypto::transaction_id,
+        ledger::create_local_transaction,
         models::{CommitPayload, Transaction, UnsignedTransaction},
     };
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -166,5 +171,18 @@ mod tests {
 
         let err = init_storage(&mut state).unwrap_err();
         assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn restores_local_sequence_from_committed_ledger() {
+        let mut state = state_with_dir("local-seq");
+        let commit = commit_with_txs(vec![tx(1, "first"), tx(2, "second")]);
+        write_commits_jsonl(&state, &[commit]);
+
+        init_storage(&mut state).unwrap();
+        assert_eq!(state.local_seq, 2);
+
+        let next = create_local_transaction(&mut state, "third".to_string()).unwrap();
+        assert_eq!(next.seq, 3);
     }
 }
