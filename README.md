@@ -9,22 +9,19 @@ Rakenduse käivitamiseks on vaja Rust-i kompilaatorit: [https://rustup.rs/](http
 
 ### Käivitamine
 ```bash
-cargo run -- <port> [peers.json] [bind-ip]
+cargo run -- <port> [options]
 
-# loob uue sõlme pordil 5000
-cargo run -- 5000
+# loob konsensusega sõlme pordil 5000
+cargo run -- 5000 --data-dir /tmp/p2p-demo
 
-# loob uue sõlme koos teadaolevate sõlmedega failist
-cargo run -- 5000 peers.json
+# loob uue sõlme koos teadaoleva peeriga
+cargo run -- 5001 --peer 127.0.0.1:5000 --data-dir /tmp/p2p-demo
 
-# võimaldab suhelda teiste sõlmedega lokaalsel võrgul
-cargo run -- 5000 peers.json 192.168.1.42
+# sama port teises masinas; peerile võib anda ainult IP
+cargo run -- 5000 --advertise-ip 192.168.1.42 --peer 192.168.1.10
 ```
 
-`peers.json` näidis:
-```json
-["127.0.0.1:5000", "192.168.0.1:5000"]
-```
+Rohkem näiteid on failis [`prax2_cli_guide.md`](prax2_cli_guide.md).
 
 ## Võrgu topoloogia
 
@@ -32,7 +29,7 @@ Iga sõlm käitub serveri ja kliendina, pole keskset sõlme:
 - server: kuulab sissetulevaid päringuid.
 - klient: pöördub perioodiliselt teiste sõlmede poole.
 
-Võrguga liitumiseks peab uuel sõlmel olema vähemalt ühe juba töötava sõlme aadress (`peers.json`). Sõlmed jagavad omavahel infot juba teadaolevatest sõlmedest võrgus ning vajadusel uuendavad enda infot.
+Võrguga liitumiseks peab uuel sõlmel olema vähemalt ühe juba töötava sõlme aadress (`--peer` või `--peers-file`). Sõlmed jagavad omavahel infot juba teadaolevatest sõlmedest võrgus ning vajadusel uuendavad enda infot.
 
 ## Protokolli kirjeldus
 
@@ -220,21 +217,21 @@ Mõni test kukkus juba ~120 juures 0% levikuni, kuid ma pole kindel, mis seda p�
 
 ## Praktikum 2
 
-Praktikum 2 lisab järjestatud transaktsioonide ledgeri ja lihtsa konsensuse. Vaikimisi töötab sõlm endiselt ilma konsensuseta, et Praktikum 1 käitumine säiliks. Konsensus lülitatakse sisse keskkonnamuutujaga.
-
 ### Käivituse seaded
 
 ```bash
-P2P_CONSENSUS=1       # käivitab konsensuse taustatsükli
-P2P_FORWARD_INV=0     # lülitab transaktsioonide gossip-forwardingu välja
-P2P_DATA_DIR=data     # baaskaust püsivate ledgerite jaoks
-P2P_ROUND_SECS=5      # konsensuse roundi pikkus sekundites
+--no-consensus          # lülitab konsensuse välja
+--forward-inv           # lülitab transaktsioonide gossip-forwardingu sisse
+--data-dir data         # baaskaust püsivate ledgerite jaoks
+--round-secs 5          # konsensuse roundi pikkus sekundites
+--peer 127.0.0.1:9000   # lisab teadaoleva peer'i
+--advertise-ip <ip>     # IP, mida teised masinad peaksid kasutama
 ```
 
 Iga sõlm kirjutab enda andmed kausta:
 
 ```text
-${P2P_DATA_DIR}/${port}/
+${data-dir}/${port}/
 ```
 
 Olulised failid:
@@ -246,7 +243,7 @@ Olulised failid:
 
 Kasutusel on lihtne permissioned rotating-king protokoll.
 
-1. Iga roundi liikmed on sorteeritud nimekiri: sõlm ise + teadaolevad peerid, välja arvatud eksperimendi jaoks blokeeritud outbound peerid.
+1. Iga roundi liikmed on sorteeritud nimekiri: sõlm ise + teadaolevad peerid.
 2. Roundi juht on `members[round % members.len()]`.
 3. Juht küsib kõigilt liikmetelt `GET /consensus/proposal/{round}`.
 4. Arvesse lähevad ainult proposalid, mille `round` ja `ledger_hash` kattuvad juhi omaga.
@@ -255,48 +252,16 @@ Kasutusel on lihtne permissioned rotating-king protokoll.
 7. Commit võetakse vastu ainult siis, kui see laiendab kohalikku `ledger_hash` väärtust ja round vastab `next_round` väärtusele.
 8. Sõlmed, mis on roundist maha jäänud, saavad catch-up teha endpointist `GET /consensus/commits/{from_round}`.
 
-Piirang: liikmeskond tuleb dünaamilisest peer-listist ja signatuure ei ole. See sobib labori eksperimendiks, aga pahatahtlik juht saaks liikmeskonna kohta valetada.
-
-### Uued endpointid
-
-```bash
-curl http://127.0.0.1:9000/ledger/status
-curl http://127.0.0.1:9000/ledger
-curl http://127.0.0.1:9000/consensus/proposal/0
-curl http://127.0.0.1:9000/consensus/commits/0
-```
-
-Commiti saatmine:
-
-```bash
-curl -X POST http://127.0.0.1:9000/consensus/commit -d '{...Commit JSON...}'
-```
-
-Eksperimendi veasüst:
-
-```bash
-curl -X POST http://127.0.0.1:9000/debug/faults \
-  -d '{"forward_inv_enabled": false, "block_peer": "127.0.0.1:9003"}'
-```
-
-`unblock_peer` eemaldab outbound bloki:
-
-```bash
-curl -X POST http://127.0.0.1:9000/debug/faults \
-  -d '{"unblock_peer": "127.0.0.1:9003"}'
-```
+Piirang: liikmeskond tuleb dünaamilisest peer-listist ja signatuure ei ole.
 
 ### Demo
 
 ```bash
 cargo build
 
-echo '[]' > /tmp/p2p-9000.json
-echo '["127.0.0.1:9000"]' > /tmp/p2p-bootstrap.json
-
-P2P_CONSENSUS=1 P2P_FORWARD_INV=0 P2P_DATA_DIR=/tmp/p2p-demo ./target/debug/peer-to-peer 9000 /tmp/p2p-9000.json
-P2P_CONSENSUS=1 P2P_FORWARD_INV=0 P2P_DATA_DIR=/tmp/p2p-demo ./target/debug/peer-to-peer 9001 /tmp/p2p-bootstrap.json
-P2P_CONSENSUS=1 P2P_FORWARD_INV=0 P2P_DATA_DIR=/tmp/p2p-demo ./target/debug/peer-to-peer 9002 /tmp/p2p-bootstrap.json
+./target/debug/peer-to-peer 9000 --data-dir /tmp/p2p-demo
+./target/debug/peer-to-peer 9001 --peer 127.0.0.1:9000 --data-dir /tmp/p2p-demo
+./target/debug/peer-to-peer 9002 --peer 127.0.0.1:9000 --data-dir /tmp/p2p-demo
 ```
 
 Teises terminalis:
@@ -311,35 +276,43 @@ curl http://127.0.0.1:9001/ledger/status
 curl http://127.0.0.1:9002/ledger/status
 ```
 
-### Prax2 katsed
-
-Katsed on failis `tests/test_prax2.py`.
-
 ```bash
-cargo build
-python3 tests/test_prax2.py --divergence
-python3 tests/test_prax2.py --converge
-python3 tests/test_prax2.py --invalid
-python3 tests/test_prax2.py --no-quorum
-python3 tests/test_prax2.py --partition
-python3 tests/test_prax2.py --load
+python3 scripts/demo.py
 ```
 
-Lühem load smoke-test:
+See käivitab päris lokaalsed sõlmed ja näitab järjest:
+
+1. baseline divergence ilma konsensuseta,
+2. convergence konsensusega,
+3. bad actor olukorda, kus vigase id-ga `/inv` lükatakse tagasi,
+4. no-quorum consensus failure olukorda,
+5. leader failure olukorda.
+
+Ühe konkreetse osa käivitamiseks:
 
 ```bash
-python3 tests/test_prax2.py --load --load-sizes 5 --load-duration 5
+python3 scripts/demo.py --scenario converge
+python3 scripts/demo.py --scenario bad-actor
+python3 scripts/demo.py --scenario no-quorum
+python3 scripts/demo.py --scenario leader-failure
 ```
 
-Viimati kontrollitud tulemused:
+Skript prindib iga osa juures `open:` URL-i kujul `http://127.0.0.1:<port>/experiments`. Ava see leht üks kord brauseris; see leiab demo abiserveri ise ja uuendab skaneeritavaid porte automaatselt, kui demo liigub järgmise osa juurde.
+
+Kui tahad kinnitust iga olulise sammu juures ja et iga valitud stsenaarium jääks enne sulgemist korraks käima:
+
+```bash
+python3 scripts/demo.py --step
+```
 
 | Katse | Tulemus |
 |-------|---------|
 | `--divergence` | 3 sõlme ilma konsensuseta ja forwardinguta tekitasid 3 erinevat ledger hash'i. |
-| `--converge` | 5 sõlme konsensusega jõudsid sama 3-transaktsioonilise ledgerini. |
-| `--invalid` | Vigase id-ga `/inv` sai `400` vastuse ja ei jõudnud ledgerisse; järgnev korrektne tx commititi kõigis sõlmedes. |
-| `--no-quorum` | 1 sõlm + 4 kättesaamatut phantom peer'i ei commitinud transaktsiooni; tx jäi mempooli. |
-| `--partition` | 3-sõlmeline ja 2-sõlmeline eraldatud grupp converge'isid eraldi, kuid lõpuks erinevate ledger hash'idega. |
-| `--load --load-sizes 50 --load-duration 30` | 50 sõlme commitisid 120 transaktsiooni; kõik jõudsid sama ledger hash'ini umbes 30.7 sekundiga. |
+| `--converge` | 5 sõlme konsensusega jõudsid sama 3-transaktsioonilise ledgerini, hash `727d2d52...`. |
+| `--leader-failure` | Round 0 juht `127.0.0.1:9650` peatati; ellujäänud sõlmed jäid seisma, ledger jäi tühjaks ja tx jäi mempooli. |
+| `--invalid` | Bad actor saatis vigase id-ga `/inv`; sõlm vastas `400`; järgnev korrektne tx commititi kõigis 3 sõlmes. |
+| `--no-quorum` | 1 sõlm + 4 kättesaamatut phantom peer'i ei commitinud 15s jooksul; ledger `0`, mempool `1`. |
+| `--partition` | 3-sõlmeline ja 2-sõlmeline eraldatud grupp converge'isid eraldi, aga erinevate hashidega `3bb45d32...` ja `268dae33...`. |
+| `--load --load-sizes 5 --load-duration 5` | 5 sõlme, 20 postitatud tx, 0 ebaõnnestunud posti, kõik sõlmed jõudsid sama ledger hash'ini umbes 5.0s-ga. |
 
-Täismõõtmise jaoks kasutab `--load` vaikimisi suurusi `5,10,25,50` ja 30 sekundit transaktsioonide tekitamist iga suuruse kohta.
+Täismõõtmise jaoks kasutab `--load` vaikimisi suurusi `5,10,25,50` ja 30 sekundit transaktsioonide tekitamist iga suuruse kohta. Varasem 50 sõlme / 120 tx mõõtmine läbis samuti: kõik 50 sõlme jõudsid sama ledger hash'ini umbes 30.7 sekundiga.

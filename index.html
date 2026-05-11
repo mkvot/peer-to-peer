@@ -1,332 +1,591 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>P2P Monitor</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>P2P Node Dashboard</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f4;
+      --panel: #ffffff;
+      --ink: #1d2522;
+      --muted: #66706b;
+      --line: #d9ded7;
+      --blue: #2563a8;
+      --green: #278057;
+      --red: #b83232;
+      --amber: #a86518;
+    }
+
+    * { box-sizing: border-box; }
 
     body {
-      font-family: monospace;
-      background: #111;
-      color: #eee;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
-    #topbar {
-      padding: 12px 20px 10px;
-      border-bottom: 1px solid #222;
-      flex-shrink: 0;
-    }
-
-    h1 { color: #7af; font-size: 16px; display: inline; margin-right: 12px; }
-    #subtitle { color: #555; font-size: 12px; display: inline; }
-
-    #controls {
-      margin-top: 8px;
+    header {
       display: flex;
-      gap: 10px;
       align-items: center;
-      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
     }
 
-    input[type="number"] {
-      background: #1e1e1e;
-      border: 1px solid #333;
-      color: #eee;
-      padding: 4px 8px;
-      font-family: monospace;
-      font-size: 13px;
-      border-radius: 4px;
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    a { color: var(--blue); text-decoration: none; }
+
+    button, input, select, textarea {
+      font: inherit;
+      border-radius: 6px;
     }
 
     button {
-      background: #7af;
-      color: #111;
-      border: none;
-      padding: 5px 14px;
-      font-family: monospace;
-      font-size: 13px;
-      border-radius: 4px;
+      min-height: 34px;
+      border: 1px solid #9eb4c9;
+      background: #e7f0f8;
+      color: #123d66;
+      padding: 6px 10px;
       cursor: pointer;
-      font-weight: bold;
-    }
-    button:hover { background: #9cf; }
-
-    #status-line { color: #555; font-size: 12px; }
-
-    /* ── main split layout ── */
-    #main {
-      display: flex;
-      flex: 1;
-      overflow: hidden;
+      font-weight: 650;
     }
 
-    /* left: graph — takes ~75% */
-    #left {
-      flex: 3;
-      display: flex;
-      flex-direction: column;
-      padding: 12px;
-      min-width: 0;
+    button:hover { background: #dbeaf6; }
+    button.secondary { border-color: var(--line); background: #f8faf7; color: var(--ink); }
+    button.danger { border-color: #d69a9a; background: #f8e8e8; color: var(--red); }
+
+    input, select, textarea {
+      min-height: 34px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      padding: 6px 8px;
     }
 
-    #canvas-wrap {
-      flex: 1;
-      position: relative;
-      min-height: 0;
-    }
-
-    canvas {
-      border: 1px solid #222;
-      border-radius: 6px;
-      background: #161616;
-      display: block;
+    textarea {
+      min-height: 72px;
+      resize: vertical;
       width: 100%;
-      height: 100%;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
     }
 
-    #legend {
-      margin-top: 6px;
-      font-size: 11px;
-      color: #555;
-      flex-shrink: 0;
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(520px, 1fr) 360px;
+      gap: 16px;
+      padding: 16px;
     }
 
-    /* right: node list — scrollable, ~25% */
-    #right {
-      flex: 1;
-      min-width: 220px;
-      max-width: 320px;
-      border-left: 1px solid #222;
+    .toolbar {
       display: flex;
-      flex-direction: column;
+      align-items: end;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 14px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: grid;
+      gap: 4px;
+      min-width: 86px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(110px, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .metric, .panel, .node-row {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+    }
+
+    .metric {
+      min-height: 70px;
+      padding: 10px 12px;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 22px;
+      line-height: 1;
+    }
+
+    .panel {
       overflow: hidden;
     }
 
-    #right-header {
-      padding: 10px 12px 8px;
-      border-bottom: 1px solid #222;
+    .panel h2 {
+      margin: 0;
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    #graph {
+      width: 100%;
+      height: 360px;
+      display: block;
+      background: #fbfcfb;
+    }
+
+    .node-list {
+      display: grid;
+      gap: 8px;
+      max-height: calc(100vh - 116px);
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .node-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      padding: 10px;
+      cursor: pointer;
+    }
+
+    .node-row:hover, .node-row.selected { border-color: #8eb2d2; background: #f5f9fc; }
+
+    .addr {
+      font-weight: 750;
+      color: var(--blue);
+      overflow-wrap: anywhere;
+    }
+
+    .small {
+      color: var(--muted);
       font-size: 12px;
-      color: #666;
-      flex-shrink: 0;
+      overflow-wrap: anywhere;
     }
 
-    #node-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 8px;
+    .pill {
+      align-self: start;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
     }
 
-    #node-list::-webkit-scrollbar { width: 6px; }
-    #node-list::-webkit-scrollbar-track { background: #1a1a1a; }
-    #node-list::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+    .ok { color: var(--green); }
+    .bad { color: var(--red); }
+    .warn { color: var(--amber); }
 
-    .node-card {
-      background: #1a1a1a;
-      border: 1px solid #2a2a2a;
-      border-radius: 5px;
-      padding: 7px 10px;
-      margin-bottom: 6px;
+    .side {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .section {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: end;
+      flex-wrap: wrap;
+    }
+
+    .row > label { flex: 1 1 120px; }
+
+    pre {
+      margin: 0;
+      max-height: 180px;
+      overflow: auto;
+      padding: 10px;
+      background: #202522;
+      color: #e7eee8;
+      border-radius: 6px;
+      font-size: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
       font-size: 12px;
     }
 
-    .node-addr { color: #7af; font-weight: bold; }
-    .node-peers { color: #666; margin-top: 3px; line-height: 1.4; }
-    .node-stats { color: #5a5; margin-top: 2px; }
+    th, td {
+      text-align: left;
+      padding: 7px 8px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
 
-    .offline { border-color: #3a2020; }
-    .offline .node-addr { color: #f66; }
-    .offline .node-peers { color: #4a3030; }
+    th {
+      color: var(--muted);
+      font-weight: 750;
+      background: #fafbf9;
+    }
+
+    @media (max-width: 980px) {
+      .shell { grid-template-columns: 1fr; }
+      .metric-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+      .node-list { max-height: none; }
+    }
   </style>
 </head>
 <body>
+  <header>
+    <h1>P2P Node Dashboard</h1>
+    <nav><a href="/experiments">Experiments</a></nav>
+  </header>
 
-  <div id="topbar">
-    <h1>P2P network</h1>
-    <span id="subtitle">polling /status on each node</span>
-    <div id="controls">
-      <label>ports:
-        <input id="port-start" type="number" value="9000" style="width:65px"> –
-        <input id="port-end"   type="number" value="9100" style="width:65px">
-      </label>
-      <button onclick="refresh()">Scan</button>
-      <label>every
-        <input id="interval" type="number" value="2" min="1" max="30" style="width:38px">s
-      </label>
-      <span id="status-line"></span>
-    </div>
-  </div>
+  <main class="shell">
+    <section>
+      <div class="toolbar">
+        <label>Host
+          <input id="host" value="127.0.0.1">
+        </label>
+        <label>Start port
+          <input id="portStart" type="number" value="9000">
+        </label>
+        <label>End port
+          <input id="portEnd" type="number" value="9010">
+        </label>
+        <label>Poll seconds
+          <input id="pollSecs" type="number" min="1" value="2">
+        </label>
+        <button id="scanBtn">Scan</button>
+        <button id="pollBtn" class="secondary">Pause</button>
+      </div>
 
-  <div id="main">
-    <div id="left">
-      <div id="canvas-wrap">
+      <div class="metric-grid">
+        <div class="metric"><span>Online</span><strong id="mOnline">0</strong></div>
+        <div class="metric"><span>Consensus</span><strong id="mConsensus">0</strong></div>
+        <div class="metric"><span>Ledger txs</span><strong id="mLedger">0</strong></div>
+        <div class="metric"><span>Mempool</span><strong id="mMempool">0</strong></div>
+        <div class="metric"><span>Unique hashes</span><strong id="mHashes">0</strong></div>
+      </div>
+
+      <div class="panel">
+        <h2>Network</h2>
         <canvas id="graph"></canvas>
       </div>
-      <div id="legend">
-        ● <span style="color:#7af">online</span> &nbsp;
-        ● <span style="color:#f66">offline</span> &nbsp;
-        — mutual connection &nbsp;
-        - - one-way
-      </div>
-    </div>
 
-    <div id="right">
-      <div id="right-header" id="node-count">nodes</div>
-      <div id="node-list"></div>
-    </div>
-  </div>
+      <div class="panel" style="margin-top:16px">
+        <h2>Nodes</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Address</th>
+              <th>Ledger</th>
+              <th>Mempool</th>
+              <th>Round</th>
+              <th>Hash</th>
+              <th>Peers</th>
+            </tr>
+          </thead>
+          <tbody id="nodeTable"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <aside class="side">
+      <div class="panel">
+        <h2>Node List</h2>
+        <div id="nodeList" class="node-list section"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Selected Node</h2>
+        <div class="section">
+          <div id="selectedSummary" class="small">No node selected.</div>
+          <div class="row">
+            <label>Transaction body
+              <input id="txBody" value="manual tx">
+            </label>
+            <button id="postTxBtn">Post tx</button>
+          </div>
+          <div class="row">
+            <label>Peer fault target
+              <input id="faultPeer" placeholder="127.0.0.1:9001">
+            </label>
+            <button id="blockBtn" class="danger">Block</button>
+            <button id="unblockBtn" class="secondary">Unblock</button>
+          </div>
+          <div class="row">
+            <button id="forwardOffBtn" class="secondary">Forward off</button>
+            <button id="forwardOnBtn" class="secondary">Forward on</button>
+            <button id="ledgerBtn" class="secondary">Load ledger</button>
+          </div>
+          <pre id="nodeOutput"></pre>
+        </div>
+      </div>
+    </aside>
+  </main>
 
   <script>
-    const BASE = "http://127.0.0.1";
-    let intervalId = null;
+    const state = {
+      nodes: [],
+      selected: null,
+      polling: true,
+      timer: null
+    };
 
-    async function fetchStatus(port) {
+    const $ = id => document.getElementById(id);
+
+    function baseUrl(port) {
+      return `http://${$("host").value.trim()}:${port}`;
+    }
+
+    function shortHash(value) {
+      if (!value) return "";
+      return value.length > 12 ? `${value.slice(0, 10)}..` : value;
+    }
+
+    async function request(port, path, options = {}) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 1600);
       try {
-        const r = await fetch(`${BASE}:${port}/status`, { signal: AbortSignal.timeout(1500) });
-        if (!r.ok) return null;
-        return await r.json();
-      } catch { return null; }
+        const response = await fetch(`${baseUrl(port)}${path}`, {
+          ...options,
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {})
+          }
+        });
+        const text = await response.text();
+        const body = text ? JSON.parse(text) : null;
+        return { status: response.status, body };
+      } finally {
+        clearTimeout(timeout);
+      }
     }
 
-    async function scanPorts() {
-      const start = parseInt(document.getElementById("port-start").value);
-      const end   = parseInt(document.getElementById("port-end").value);
+    async function scan() {
+      const start = Number($("portStart").value);
+      const end = Number($("portEnd").value);
       const ports = [];
-      for (let p = start; p <= end; p++) ports.push(String(p));
+      for (let port = start; port <= end; port++) ports.push(port);
       const results = await Promise.all(ports.map(async port => {
-        const data = await fetchStatus(port);
-        return { port, data };
+        try {
+          const result = await request(port, "/status");
+          return result.status === 200 ? { port, ...result.body } : null;
+        } catch {
+          return null;
+        }
       }));
-      return results.filter(r => r.data !== null);
+
+      state.nodes = results.filter(Boolean).sort((a, b) => a.port - b.port);
+      if (state.selected && !state.nodes.some(node => node.port === state.selected.port)) {
+        state.selected = null;
+      }
+      if (!state.selected && state.nodes.length) state.selected = state.nodes[0];
+      render();
     }
 
-    async function refresh() {
-      document.getElementById("status-line").textContent = "scanning…";
-      const results = await scanPorts();
-      const online = results.length;
-      document.getElementById("status-line").textContent =
-        `${online} node${online !== 1 ? "s" : ""} online`;
-      document.getElementById("right-header").textContent =
-        `${online} node${online !== 1 ? "s" : ""}`;
-      drawGraph(results);
-      drawList(results);
+    function render() {
+      const nodes = state.nodes;
+      const hashes = new Set(nodes.map(node => node.ledger_hash));
+      $("mOnline").textContent = nodes.length;
+      $("mConsensus").textContent = nodes.filter(node => node.consensus_enabled).length;
+      $("mLedger").textContent = nodes.reduce((sum, node) => sum + Number(node.ledger_len || 0), 0);
+      $("mMempool").textContent = nodes.reduce((sum, node) => sum + Number(node.mempool_count || 0), 0);
+      $("mHashes").textContent = hashes.size;
+
+      renderNodeList();
+      renderNodeTable();
+      renderSelected();
+      drawGraph();
     }
 
-    function setRefresh() {
-      clearInterval(intervalId);
-      const secs = parseInt(document.getElementById("interval").value) * 1000;
-      intervalId = setInterval(refresh, secs);
+    function renderNodeList() {
+      $("nodeList").innerHTML = state.nodes.map(node => {
+        const selected = state.selected && state.selected.port === node.port ? " selected" : "";
+        const mode = node.consensus_enabled ? "consensus" : "direct";
+        return `
+          <div class="node-row${selected}" data-port="${node.port}">
+            <div>
+              <div class="addr">${node.addr}</div>
+              <div class="small">round ${node.next_round} | ${mode} | ${node.peers.length} peers</div>
+              <div class="small">hash ${shortHash(node.ledger_hash)}</div>
+            </div>
+            <div class="pill">${node.ledger_len} tx</div>
+          </div>
+        `;
+      }).join("") || '<div class="small">No online nodes.</div>';
+
+      document.querySelectorAll(".node-row").forEach(row => {
+        row.addEventListener("click", () => {
+          state.selected = state.nodes.find(node => node.port === Number(row.dataset.port));
+          render();
+        });
+      });
     }
 
-    document.getElementById("interval").addEventListener("change", setRefresh);
+    function renderNodeTable() {
+      $("nodeTable").innerHTML = state.nodes.map(node => `
+        <tr>
+          <td>${node.addr}</td>
+          <td>${node.ledger_len}</td>
+          <td>${node.mempool_count}</td>
+          <td>${node.next_round}</td>
+          <td>${shortHash(node.ledger_hash)}</td>
+          <td>${node.peers.length}</td>
+        </tr>
+      `).join("");
+    }
 
-    // ── graph ─────────────────────────────────────────────────────────────────
+    function renderSelected() {
+      const node = state.selected;
+      if (!node) {
+        $("selectedSummary").textContent = "No node selected.";
+        return;
+      }
+      $("selectedSummary").innerHTML = `
+        <div><strong>${node.addr}</strong></div>
+        <div>ledger ${node.ledger_len}, mempool ${node.mempool_count}, commits ${node.commit_count}</div>
+        <div>data ${node.data_dir}</div>
+      `;
+    }
 
-    function drawGraph(results) {
-      const canvas = document.getElementById("graph");
-      const wrap   = document.getElementById("canvas-wrap");
-
-      // resize canvas to match CSS layout
-      canvas.width  = wrap.clientWidth;
-      canvas.height = wrap.clientHeight;
-
+    function drawGraph() {
+      const canvas = $("graph");
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.max(300, Math.floor(rect.width));
+      canvas.height = 360;
       const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const nodes = state.nodes;
+      if (!nodes.length) return;
 
-      const n = results.length;
-      if (n === 0) return;
-
-      const cx = canvas.width  / 2;
+      const positions = new Map();
+      const cx = canvas.width / 2;
       const cy = canvas.height / 2;
-      const r  = Math.min(cx, cy) - 50;
-
-      const positions = {};
-      results.forEach(({ port }, i) => {
-        const angle = (2 * Math.PI * i / n) - Math.PI / 2;
-        positions[port] = {
-          x: cx + r * Math.cos(angle),
-          y: cy + r * Math.sin(angle),
-        };
-      });
-
-      // edges
-      results.forEach(({ port, data }) => {
-        if (!data) return;
-        const from = positions[port];
-        data.peers.forEach(peer => {
-          const peerPort = peer.split(":")[1];
-          const to = positions[peerPort];
-          if (!to) return;
-          const peerData = results.find(r => r.port === peerPort)?.data;
-          const mutual   = peerData?.peers.some(p => p.endsWith(`:${port}`));
-          ctx.beginPath();
-          ctx.moveTo(from.x, from.y);
-          ctx.lineTo(to.x,   to.y);
-          ctx.strokeStyle = mutual ? "#7af5" : "#7af2";
-          ctx.lineWidth   = mutual ? 1.5 : 1;
-          ctx.setLineDash(mutual ? [] : [4, 4]);
-          ctx.stroke();
-          ctx.setLineDash([]);
+      const radius = Math.max(80, Math.min(canvas.width, canvas.height) / 2 - 42);
+      nodes.forEach((node, index) => {
+        const angle = (Math.PI * 2 * index / nodes.length) - Math.PI / 2;
+        positions.set(node.addr, {
+          x: cx + Math.cos(angle) * radius,
+          y: cy + Math.sin(angle) * radius
         });
       });
 
-      // nodes
-      const nodeR = n > 60 ? 10 : n > 30 ? 13 : 17;
-      results.forEach(({ port, data }) => {
-        const pos    = positions[port];
-        const online = data !== null;
+      ctx.lineWidth = 1;
+      nodes.forEach(node => {
+        const from = positions.get(node.addr);
+        node.peers.forEach(peer => {
+          const to = positions.get(peer);
+          if (!from || !to) return;
+          const mutual = nodes.some(other => other.addr === peer && other.peers.includes(node.addr));
+          ctx.strokeStyle = mutual ? "#9fb7a9" : "#d3b27b";
+          ctx.setLineDash(mutual ? [] : [5, 5]);
+          ctx.beginPath();
+          ctx.moveTo(from.x, from.y);
+          ctx.lineTo(to.x, to.y);
+          ctx.stroke();
+        });
+      });
+      ctx.setLineDash([]);
+
+      nodes.forEach(node => {
+        const pos = positions.get(node.addr);
+        const selected = state.selected && state.selected.addr === node.addr;
         ctx.beginPath();
-        ctx.arc(pos.x, pos.y, nodeR, 0, 2 * Math.PI);
-        ctx.fillStyle   = online ? "#182030" : "#281818";
+        ctx.arc(pos.x, pos.y, selected ? 17 : 14, 0, Math.PI * 2);
+        ctx.fillStyle = node.consensus_enabled ? "#278057" : "#a86518";
         ctx.fill();
-        ctx.strokeStyle = online ? "#7af" : "#f66";
-        ctx.lineWidth   = 1.5;
+        ctx.lineWidth = selected ? 4 : 2;
+        ctx.strokeStyle = selected ? "#2563a8" : "#ffffff";
         ctx.stroke();
-
-        ctx.fillStyle    = online ? "#7af" : "#f66";
-        ctx.font         = `bold ${nodeR < 13 ? 9 : 11}px monospace`;
-        ctx.textAlign    = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(port, pos.x, pos.y);
-
-        if (online && nodeR >= 13) {
-          ctx.fillStyle = "#5a5";
-          ctx.font      = "9px monospace";
-          ctx.fillText(`${data.block_count}b`, pos.x, pos.y + nodeR + 9);
-        }
+        ctx.fillStyle = "#1d2522";
+        ctx.font = "12px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillText(String(node.port), pos.x, pos.y + 31);
       });
     }
 
-    // ── node list (right panel) ───────────────────────────────────────────────
-
-    function drawList(results) {
-      const list = document.getElementById("node-list");
-      if (results.length === 0) {
-        list.innerHTML = '<div style="color:#444;padding:12px;font-size:12px">no nodes found</div>';
-        return;
-      }
-      list.innerHTML = results.map(({ port, data }) => {
-        if (!data) return `
-          <div class="node-card offline">
-            <div class="node-addr">:${port}</div>
-            <div class="node-peers">offline</div>
-          </div>`;
-        const peers = data.peers.map(p => ":" + p.split(":")[1]).join(", ") || "none";
-        return `
-          <div class="node-card">
-            <div class="node-addr">${data.addr}</div>
-            <div class="node-peers">${peers}</div>
-            <div class="node-stats">blocks: ${data.block_count} · ledger: ${data.ledger_len ?? 0} · pending: ${data.mempool_count ?? 0}</div>
-          </div>`;
-      }).join("");
+    async function postTx() {
+      if (!state.selected) return;
+      const body = $("txBody").value || "manual tx";
+      const result = await request(state.selected.port, "/tx", {
+        method: "POST",
+        body: JSON.stringify({ body })
+      });
+      $("nodeOutput").textContent = JSON.stringify(result.body, null, 2);
+      await scan();
     }
 
-    refresh();
-    setRefresh();
+    async function setFault(payload) {
+      if (!state.selected) return;
+      const result = await request(state.selected.port, "/debug/faults", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      $("nodeOutput").textContent = JSON.stringify(result.body, null, 2);
+      await scan();
+    }
+
+    async function loadLedger() {
+      if (!state.selected) return;
+      const result = await request(state.selected.port, "/ledger");
+      $("nodeOutput").textContent = JSON.stringify(result.body, null, 2);
+    }
+
+    function schedule() {
+      clearInterval(state.timer);
+      state.timer = setInterval(() => {
+        if (state.polling) scan();
+      }, Math.max(1, Number($("pollSecs").value)) * 1000);
+    }
+
+    $("scanBtn").addEventListener("click", scan);
+    $("pollBtn").addEventListener("click", () => {
+      state.polling = !state.polling;
+      $("pollBtn").textContent = state.polling ? "Pause" : "Resume";
+    });
+    $("pollSecs").addEventListener("change", schedule);
+    $("postTxBtn").addEventListener("click", postTx);
+    $("blockBtn").addEventListener("click", () => setFault({ block_peer: $("faultPeer").value.trim() }));
+    $("unblockBtn").addEventListener("click", () => setFault({ unblock_peer: $("faultPeer").value.trim() }));
+    $("forwardOffBtn").addEventListener("click", () => setFault({ forward_inv_enabled: false }));
+    $("forwardOnBtn").addEventListener("click", () => setFault({ forward_inv_enabled: true }));
+    $("ledgerBtn").addEventListener("click", loadLedger);
+    window.addEventListener("resize", drawGraph);
+
+    schedule();
+    scan();
   </script>
 </body>
 </html>

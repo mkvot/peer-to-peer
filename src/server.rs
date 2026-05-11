@@ -1,10 +1,10 @@
 use crate::http::read_request;
 use crate::routes::{
-    handle_addr, handle_announce, handle_debug_faults, handle_get_blocks, handle_get_blocks_from,
-    handle_get_consensus_commits, handle_get_consensus_proposal, handle_get_data,
-    handle_get_ledger, handle_ledger_status, handle_not_found, handle_options, handle_ping,
-    handle_post_block, handle_post_consensus_commit, handle_post_inv, handle_post_tx,
-    handle_status,
+    handle_addr, handle_announce, handle_debug_faults, handle_experiments_page, handle_get_blocks,
+    handle_get_blocks_from, handle_get_consensus_commits, handle_get_consensus_proposal,
+    handle_get_data, handle_get_ledger, handle_index, handle_ledger_status, handle_not_found,
+    handle_options, handle_ping, handle_post_block, handle_post_consensus_commit, handle_post_inv,
+    handle_post_tx, handle_status,
 };
 use crate::state::NodeState;
 use std::sync::{Arc, Mutex};
@@ -16,8 +16,14 @@ use std::{
 
 fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
     let request = read_request(&mut stream)?;
+    let path = request
+        .path
+        .split_once('?')
+        .map_or(request.path.as_str(), |(path, _)| path);
 
-    match (request.method.as_str(), request.path.as_str()) {
+    match (request.method.as_str(), path) {
+        ("GET", "/") | ("GET", "/index.html") => handle_index(stream),
+        ("GET", "/experiments") | ("GET", "/experiments.html") => handle_experiments_page(stream),
         ("GET", "/ping") => handle_ping(stream, request),
         ("GET", "/addr") => handle_addr(stream, state),
         ("POST", "/peers/announce") => handle_announce(stream, state, request.body),

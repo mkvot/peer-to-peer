@@ -16,7 +16,6 @@ import os
 import random
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -29,7 +28,6 @@ DEFAULT_BASE_PORT = 9500
 TIMEOUT = 3
 
 processes = []
-peers_files = []
 log_lines = []
 
 
@@ -150,25 +148,20 @@ def wait_for_all(ports, timeout=8, expected_data_dir=None, expected_consensus=No
         )
 
 
-def start_node(binary: str, port: int, peers=None, env_overrides=None):
+def start_node(binary: str, port: int, peers=None, args=None):
     if peers is None:
         peers = []
-    if env_overrides is None:
-        env_overrides = {}
+    if args is None:
+        args = []
 
-    peers_file = tempfile.NamedTemporaryFile("w", delete=False, suffix=f"_{port}.json")
-    json.dump([addr(peer) for peer in peers], peers_file)
-    peers_file.close()
-    peers_files.append(peers_file.name)
-
-    env = os.environ.copy()
-    env.update(env_overrides)
+    cmd = [binary, str(port), *args]
+    for peer in peers:
+        cmd.extend(["--peer", addr(peer)])
 
     proc = subprocess.Popen(
-        [binary, str(port), peers_file.name],
+        cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        env=env,
     )
     processes.append((proc, port))
     return proc
@@ -185,13 +178,6 @@ def stop_all():
             proc.kill()
 
     processes.clear()
-
-    for path in peers_files:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-    peers_files.clear()
 
 
 def stop_node_by_port(port: int):
@@ -234,14 +220,16 @@ def expected_leader_from_status(stat):
 
 
 def start_consensus_cluster(binary: str, ports, data_dir: str, round_secs="2"):
-    env = {
-        "P2P_CONSENSUS": "1",
-        "P2P_FORWARD_INV": "0",
-        "P2P_DATA_DIR": data_dir,
-        "P2P_ROUND_SECS": round_secs,
-    }
+    args = [
+        "--consensus",
+        "--no-forward-inv",
+        "--data-dir",
+        data_dir,
+        "--round-secs",
+        round_secs,
+    ]
 
-    proc = start_node(binary, ports[0], env_overrides=env)
+    proc = start_node(binary, ports[0], args=args)
     wait_for_node(
         ports[0],
         proc=proc,
@@ -250,7 +238,7 @@ def start_consensus_cluster(binary: str, ports, data_dir: str, round_secs="2"):
     )
 
     for port in ports[1:]:
-        proc = start_node(binary, port, peers=[ports[0]], env_overrides=env)
+        proc = start_node(binary, port, peers=[ports[0]], args=args)
         wait_for_node(
             port,
             proc=proc,
@@ -260,7 +248,7 @@ def start_consensus_cluster(binary: str, ports, data_dir: str, round_secs="2"):
         time.sleep(0.2)
 
     wait_for_all(ports, expected_data_dir=data_dir, expected_consensus=True)
-    return env
+    return args
 
 
 def wait_same_ledger(ports, expected_len=None, timeout=35):
@@ -322,12 +310,14 @@ def test_divergence(binary: str, base_port: int):
     ports = [base_port + i for i in range(3)]
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"/tmp/p2p-prax2-divergence-{run_id}"
-    env = {
-        "P2P_CONSENSUS": "0",
-        "P2P_FORWARD_INV": "0",
-        "P2P_DATA_DIR": data_dir,
-        "P2P_ROUND_SECS": "3",
-    }
+    args = [
+        "--no-consensus",
+        "--no-forward-inv",
+        "--data-dir",
+        data_dir,
+        "--round-secs",
+        "3",
+    ]
 
     log("Prax2 no-consensus divergence experiment")
     log(f"binary={binary}")
@@ -335,7 +325,7 @@ def test_divergence(binary: str, base_port: int):
     log(f"data_dir={data_dir}")
 
     try:
-        proc = start_node(binary, ports[0], env_overrides=env)
+        proc = start_node(binary, ports[0], args=args)
         wait_for_node(
             ports[0],
             proc=proc,
@@ -344,7 +334,7 @@ def test_divergence(binary: str, base_port: int):
         )
 
         for port in ports[1:]:
-            proc = start_node(binary, port, peers=[ports[0]], env_overrides=env)
+            proc = start_node(binary, port, peers=[ports[0]], args=args)
             wait_for_node(
                 port,
                 proc=proc,
@@ -379,12 +369,6 @@ def test_converge(binary: str, base_port: int):
     ports = [base_port + 100 + i for i in range(5)]
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"/tmp/p2p-prax2-converge-{run_id}"
-    env = {
-        "P2P_CONSENSUS": "1",
-        "P2P_FORWARD_INV": "0",
-        "P2P_DATA_DIR": data_dir,
-        "P2P_ROUND_SECS": "2",
-    }
 
     log("Prax2 consensus convergence experiment")
     log(f"binary={binary}")
@@ -413,7 +397,7 @@ def test_converge(binary: str, base_port: int):
         stop_all()
 
 
-def test_leader_failure(binary: str, base_port: int):
+def test_leader_failure(binary: str, base_port: int, expected_result: str):
     ports = [base_port + 150 + i for i in range(5)]
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"/tmp/p2p-prax2-leader-failure-{run_id}"
@@ -472,6 +456,12 @@ def test_leader_failure(binary: str, base_port: int):
         log(f"survivor_next_rounds={rounds}")
         log(f"survivor_commit_counts={commit_counts}")
         log(f"survivor_mempools={mempools}")
+
+        if expected_result != "any" and result != expected_result:
+            raise AssertionError(
+                f"expected leader failure result {expected_result}, got {result}"
+            )
+
         log("RESULT: PASSED")
     finally:
         stop_all()
@@ -523,12 +513,14 @@ def test_no_quorum(binary: str, base_port: int):
     phantom_ports = [port + i for i in range(1, 5)]
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"/tmp/p2p-prax2-no-quorum-{run_id}"
-    env = {
-        "P2P_CONSENSUS": "1",
-        "P2P_FORWARD_INV": "0",
-        "P2P_DATA_DIR": data_dir,
-        "P2P_ROUND_SECS": "2",
-    }
+    args = [
+        "--consensus",
+        "--no-forward-inv",
+        "--data-dir",
+        data_dir,
+        "--round-secs",
+        "2",
+    ]
 
     log("Prax2 no-quorum experiment")
     log(f"binary={binary}")
@@ -537,7 +529,7 @@ def test_no_quorum(binary: str, base_port: int):
     log(f"data_dir={data_dir}")
 
     try:
-        proc = start_node(binary, port, peers=phantom_ports, env_overrides=env)
+        proc = start_node(binary, port, peers=phantom_ports, args=args)
         wait_for_node(
             port,
             proc=proc,
@@ -574,12 +566,14 @@ def test_partition(binary: str, base_port: int):
     ports = group_a + group_b
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     data_dir = f"/tmp/p2p-prax2-partition-{run_id}"
-    env = {
-        "P2P_CONSENSUS": "1",
-        "P2P_FORWARD_INV": "0",
-        "P2P_DATA_DIR": data_dir,
-        "P2P_ROUND_SECS": "2",
-    }
+    args = [
+        "--consensus",
+        "--no-forward-inv",
+        "--data-dir",
+        data_dir,
+        "--round-secs",
+        "2",
+    ]
 
     log("Prax2 partition experiment")
     log(f"binary={binary}")
@@ -588,7 +582,7 @@ def test_partition(binary: str, base_port: int):
     log(f"data_dir={data_dir}")
 
     try:
-        proc = start_node(binary, group_a[0], env_overrides=env)
+        proc = start_node(binary, group_a[0], args=args)
         wait_for_node(
             group_a[0],
             proc=proc,
@@ -596,7 +590,7 @@ def test_partition(binary: str, base_port: int):
             expected_consensus=True,
         )
         for port in group_a[1:]:
-            proc = start_node(binary, port, peers=[group_a[0]], env_overrides=env)
+            proc = start_node(binary, port, peers=[group_a[0]], args=args)
             wait_for_node(
                 port,
                 proc=proc,
@@ -604,7 +598,7 @@ def test_partition(binary: str, base_port: int):
                 expected_consensus=True,
             )
 
-        proc = start_node(binary, group_b[0], env_overrides=env)
+        proc = start_node(binary, group_b[0], args=args)
         wait_for_node(
             group_b[0],
             proc=proc,
@@ -612,7 +606,7 @@ def test_partition(binary: str, base_port: int):
             expected_consensus=True,
         )
         for port in group_b[1:]:
-            proc = start_node(binary, port, peers=[group_b[0]], env_overrides=env)
+            proc = start_node(binary, port, peers=[group_b[0]], args=args)
             wait_for_node(
                 port,
                 proc=proc,
@@ -764,6 +758,12 @@ def parse_args():
     parser.add_argument("--divergence", action="store_true")
     parser.add_argument("--converge", action="store_true")
     parser.add_argument("--leader-failure", action="store_true")
+    parser.add_argument(
+        "--leader-failure-expect",
+        choices=["any", "recovered", "stalled", "partial_progress"],
+        default="stalled",
+        help="expected leader-failure outcome; default documents the current no-view-change behavior",
+    )
     parser.add_argument("--invalid", action="store_true")
     parser.add_argument("--no-quorum", action="store_true")
     parser.add_argument("--partition", action="store_true")
@@ -798,7 +798,7 @@ def main():
         test_converge(args.binary, args.base_port)
         save_results("converge")
     if args.leader_failure:
-        test_leader_failure(args.binary, args.base_port)
+        test_leader_failure(args.binary, args.base_port, args.leader_failure_expect)
         save_results("leader_failure")
     if args.invalid:
         test_invalid(args.binary, args.base_port)

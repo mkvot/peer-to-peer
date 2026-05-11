@@ -67,7 +67,7 @@ def start_node(port: int, peers: list = []) -> subprocess.Popen:
     with open(peers_file, "w") as f:
         json.dump([addr(p) for p in peers], f)
     proc = subprocess.Popen(
-        [BINARY, str(port), peers_file],
+        [BINARY, str(port), "--no-consensus", "--forward-inv", "--peers-file", peers_file],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

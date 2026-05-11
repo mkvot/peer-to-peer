@@ -193,7 +193,20 @@ pub fn read_response(stream: &mut TcpStream) -> Result<Response> {
     Ok(parse_response(&buf))
 }
 
-pub fn reply(mut stream: TcpStream, status: u16, body: String) -> Result<()> {
+pub fn reply(stream: TcpStream, status: u16, body: String) -> Result<()> {
+    reply_with_content_type(stream, status, "application/json", body)
+}
+
+pub fn reply_html(stream: TcpStream, status: u16, body: String) -> Result<()> {
+    reply_with_content_type(stream, status, "text/html; charset=utf-8", body)
+}
+
+fn reply_with_content_type(
+    mut stream: TcpStream,
+    status: u16,
+    content_type: &str,
+    body: String,
+) -> Result<()> {
     let status_text = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -204,7 +217,7 @@ pub fn reply(mut stream: TcpStream, status: u16, body: String) -> Result<()> {
     };
 
     let response = format!(
-        "HTTP/1.1 {status} {status_text}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+        "HTTP/1.1 {status} {status_text}\r\nContent-Type: {content_type}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
         body.len(),
         body
     );

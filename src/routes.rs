@@ -11,7 +11,7 @@ use crate::{
     client::{forward_block, forward_inv, post_commit},
     consensus::{apply_commit, build_proposal, validate_commit_for_state},
     crypto::calculate_hash,
-    http::{Request, reply},
+    http::{Request, reply, reply_html},
     ledger::{IngestResult, create_local_transaction, ingest_transaction},
     models::{Commit, Transaction},
     state::NodeState,
@@ -53,6 +53,14 @@ pub fn handle_announce(
 
 pub fn handle_not_found(stream: TcpStream) -> Result<()> {
     reply(stream, 404, "".to_string())
+}
+
+pub fn handle_index(stream: TcpStream) -> Result<()> {
+    reply_html(stream, 200, include_str!("../index.html").to_string())
+}
+
+pub fn handle_experiments_page(stream: TcpStream) -> Result<()> {
+    reply_html(stream, 200, include_str!("../experiments.html").to_string())
 }
 
 pub fn handle_get_blocks(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
