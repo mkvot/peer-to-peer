@@ -21,7 +21,7 @@ cargo run -- 5001 --peer 127.0.0.1:5000 --data-dir /tmp/p2p-demo
 cargo run -- 5000 --advertise-ip 192.168.1.42 --peer 192.168.1.10
 ```
 
-Rohkem näiteid on failis [`prax2_cli_guide.md`](prax2_cli_guide.md).
+Rohkem näiteid on failis [`cli.md`](cli.md).
 
 ## Võrgu topoloogia
 
@@ -282,15 +282,17 @@ python3 scripts/demo.py
 
 See käivitab päris lokaalsed sõlmed ja näitab järjest:
 
-1. baseline divergence ilma konsensuseta,
-2. convergence konsensusega,
-3. bad actor olukorda, kus vigase id-ga `/inv` lükatakse tagasi,
-4. no-quorum consensus failure olukorda,
-5. leader failure olukorda.
+1. mõõdukat 10-sõlmelist konsensuse katset,
+2. baseline divergence olukorda ilma konsensuseta,
+3. convergence olukorda konsensusega,
+4. bad actor olukorda, kus vigase id-ga `/inv` lükatakse tagasi,
+5. no-quorum consensus failure olukorda,
+6. leader failure olukorda.
 
 Ühe konkreetse osa käivitamiseks:
 
 ```bash
+python3 scripts/demo.py --scenario moderate
 python3 scripts/demo.py --scenario converge
 python3 scripts/demo.py --scenario bad-actor
 python3 scripts/demo.py --scenario no-quorum
@@ -315,4 +317,29 @@ python3 scripts/demo.py --step
 | `--partition` | 3-sõlmeline ja 2-sõlmeline eraldatud grupp converge'isid eraldi, aga erinevate hashidega `3bb45d32...` ja `268dae33...`. |
 | `--load --load-sizes 5 --load-duration 5` | 5 sõlme, 20 postitatud tx, 0 ebaõnnestunud posti, kõik sõlmed jõudsid sama ledger hash'ini umbes 5.0s-ga. |
 
-Täismõõtmise jaoks kasutab `--load` vaikimisi suurusi `5,10,25,50` ja 30 sekundit transaktsioonide tekitamist iga suuruse kohta. Varasem 50 sõlme / 120 tx mõõtmine läbis samuti: kõik 50 sõlme jõudsid sama ledger hash'ini umbes 30.7 sekundiga.
+### Konsensuse skaleerimise mõõtmine
+
+
+```bash
+python3 tests/test_prax2.py --base-port 23000 --divergence
+python3 tests/test_prax2.py --base-port 24000 --load --load-sizes 10,20,30 --load-duration 5
+python3 tests/test_prax2.py --base-port 26000 --load --load-sizes 40,50,75,100 --load-duration 5
+python3 tests/test_prax2.py --base-port 30000 --load --load-sizes 110,120 --load-duration 5
+python3 tests/test_prax2.py --base-port 28000 --load --load-sizes 125,150,200 --load-duration 5
+```
+
+| Variant | Sõlmi | Postitatud tx | Ebaõnnestunud postid | Ledgeri kokkulangevus | Tulemus |
+|---------|------:|--------------:|---------------------:|------------------------|---------|
+| Konsensuseta | 3 | 3 | 0 | 3 erinevat hash'i / 3 sõlme | kokkulepet ei tekkinud |
+| Konsensusega | 10 | 20 | 0 | 10/10 sama pikkus, 1 hash | converge'is |
+| Konsensusega | 20 | 20 | 0 | 20/20 sama pikkus, 1 hash | converge'is |
+| Konsensusega | 30 | 20 | 0 | 30/30 sama pikkus, 1 hash | converge'is |
+| Konsensusega | 40 | 20 | 0 | 40/40 sama pikkus, 1 hash | converge'is |
+| Konsensusega | 50 | 20 | 0 | 50/50 sama pikkus, 1 hash | converge'is |
+| Konsensusega | 75 | 20 | 0 | 75/75 sama pikkus, 1 hash | converge'is, aga aeglaselt |
+| Konsensusega | 100 | 20 | 0 | 100/100 sama pikkus, 1 hash | converge'is |
+| Konsensusega | 110 | 19 | 1 | 2 hash'i, osa sõlmi snapshotis kättesaamatud | ei converge'inud timeouti jooksul |
+| Konsensusega | 120 | 2 | 2 | 2 hash'i, mitu sõlme snapshotis kättesaamatud | ei converge'inud timeouti jooksul |
+| Konsensusega | 125 | 0 | n/a | sõlm `28536` ei käivitunud | käivitus kukkus läbi |
+
+Selles masinas ja lühikese 5-sekundilise koormusega on praktiline piir umbes 100-110 sõlme vahel. 75 sõlme converge'is, aga selleks kulus umbes 73.7 sekundit. 110+ sõlme juures hakkasid tekkima HTTP timeoutid ja snapshotis kättesaamatud sõlmed, mistõttu kõik sõlmed ei jõudnud testiaja sees sama ledgerini.

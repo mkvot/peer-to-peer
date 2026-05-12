@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Usage:
-    python3 scripts/demo.py                         # baseline + converge + bad actor + no-quorum + leader failure
+    python3 scripts/demo.py                         # moderate consensus + baseline + failures
     python3 scripts/demo.py --step                  # ask before/after major actions in every selected scenario
+    python3 scripts/demo.py --scenario moderate     # 10-node consensus warmup
     python3 scripts/demo.py --scenario converge     # only one scenario
     python3 scripts/demo.py --scenario bad-actor    # invalid /inv is rejected
     python3 scripts/demo.py --scenario no-quorum    # consensus enabled, but no quorum
@@ -437,18 +438,54 @@ def expected_leader_from_status(stat):
     return members[stat["next_round"] % len(members)]
 
 
-def pause_before_stop(step: bool, hold: bool, message: str):
-    pause_if_enabled(step or hold, message)
+def pause_before_stop(pause: bool, step: bool, hold: bool, message: str):
+    pause_if_enabled(pause or step or hold, message)
 
 
 # -- demo scenarios ------------------------------------------------------------
+
+
+def demo_moderate_consensus(binary: str, base_port: int, pause=False, step=False, hold=False):
+    ports = [base_port + 50 + i for i in range(10)]
+    data_dir = f"/tmp/p2p-demo-moderate-{datetime.now().strftime('%H%M%S')}"
+
+    section("DEMO 1: Moderate consensus", "ten nodes try to agree on one ordered ledger")
+    print_scan_hint(ports, "moderate consensus", base_port)
+
+    try:
+        start_cluster(binary, ports, data_dir, consensus=True)
+        log("\n  waiting for peer discovery and empty rounds...")
+        time.sleep(8)
+        snapshot_summary(ports, "initial moderate snapshot")
+        pause_if_enabled(pause, "Open the dashboard with the scan range above, then press Enter...")
+
+        log("\n  posting one transaction to each of the ten nodes...")
+        for index, port in enumerate(ports):
+            tx = post_tx(port, f"moderate tx {index + 1} from {port}")
+            log(f"  posted {index + 1:02d}/10 to :{port}: {tx['id'][:12]}")
+
+        pause_if_enabled(step, "Transactions are posted. Watch consensus, then press Enter...")
+        rows = wait_same_ledger(ports, expected_len=10, timeout=50)
+        snapshot_summary(ports, "after moderate consensus")
+        hashes = {row["status"]["ledger_hash"] for row in rows.values()}
+        passed = len(hashes) == 1
+        log(
+            f"\n  RESULT: {'PASSED' if passed else 'FAILED'} "
+            f"(nodes=10, txs=10, unique_hashes={len(hashes)})",
+            "green" if passed else "red",
+        )
+
+        pause_before_stop(pause, step, hold, "Moderate cluster is still running. Press Enter to stop it...")
+    finally:
+        stop_all()
+        time.sleep(1)
 
 
 def demo_divergence(binary: str, base_port: int, pause=False, step=False, hold=False):
     ports = [base_port + i for i in range(3)]
     data_dir = f"/tmp/p2p-demo-divergence-{datetime.now().strftime('%H%M%S')}"
 
-    section("DEMO 1: Baseline divergence", "consensus disabled; direct-mode nodes commit different local ledgers")
+    section("DEMO 2: Baseline divergence", "consensus disabled; direct-mode nodes commit different local ledgers")
     print_scan_hint(ports, "divergence", base_port)
 
     try:
@@ -473,7 +510,7 @@ def demo_divergence(binary: str, base_port: int, pause=False, step=False, hold=F
             "green" if passed else "red",
         )
 
-        pause_before_stop(step, hold, "Cluster is still running. Press Enter to stop it...")
+        pause_before_stop(pause, step, hold, "Cluster is still running. Press Enter to stop it...")
     finally:
         stop_all()
         time.sleep(1)
@@ -483,7 +520,7 @@ def demo_converge(binary: str, base_port: int, pause=False, step=False, hold=Fal
     ports = [base_port + 100 + i for i in range(5)]
     data_dir = f"/tmp/p2p-demo-converge-{datetime.now().strftime('%H%M%S')}"
 
-    section("DEMO 2: Consensus convergence", "five nodes agree on the same ordered ledger")
+    section("DEMO 3: Consensus convergence", "five nodes agree on the same ordered ledger")
     print_scan_hint(ports, "converge", base_port, target_ports=ports[:3])
 
     try:
@@ -509,7 +546,7 @@ def demo_converge(binary: str, base_port: int, pause=False, step=False, hold=Fal
             "green" if passed else "red",
         )
 
-        pause_before_stop(step, hold, "Cluster is still running. Press Enter to stop it...")
+        pause_before_stop(pause, step, hold, "Cluster is still running. Press Enter to stop it...")
     finally:
         stop_all()
         time.sleep(1)
@@ -520,7 +557,7 @@ def demo_bad_actor(binary: str, base_port: int, pause=False, step=False, hold=Fa
     data_dir = f"/tmp/p2p-demo-bad-actor-{datetime.now().strftime('%H%M%S')}"
     invalid_body = "invalid transaction should not commit"
 
-    section("DEMO 3: Bad actor - invalid transaction", "a peer sends a forged tx id; honest nodes reject it")
+    section("DEMO 4: Bad actor - invalid transaction", "a peer sends a forged tx id; honest nodes reject it")
     print_scan_hint(ports, "bad actor", base_port, target_ports=[ports[0]])
 
     try:
@@ -556,7 +593,7 @@ def demo_bad_actor(binary: str, base_port: int, pause=False, step=False, hold=Fa
             "green" if passed else "red",
         )
 
-        pause_before_stop(step, hold, "Cluster is still running. Press Enter to stop it...")
+        pause_before_stop(pause, step, hold, "Cluster is still running. Press Enter to stop it...")
     finally:
         stop_all()
         time.sleep(1)
@@ -567,7 +604,7 @@ def demo_no_quorum(binary: str, base_port: int, pause=False, step=False, hold=Fa
     phantom_ports = [port + i for i in range(1, 5)]
     data_dir = f"/tmp/p2p-demo-no-quorum-{datetime.now().strftime('%H%M%S')}"
 
-    section("DEMO 4: Consensus failure - no quorum", "consensus enabled, but one real node cannot reach majority")
+    section("DEMO 5: Consensus failure - no quorum", "consensus enabled, but one real node cannot reach majority")
     print_scan_hint([port], "no quorum", base_port)
     log(f"  phantom peers: {', '.join(addr(peer) for peer in phantom_ports)}")
 
@@ -602,7 +639,7 @@ def demo_no_quorum(binary: str, base_port: int, pause=False, step=False, hold=Fa
             "green" if passed else "red",
         )
 
-        pause_before_stop(step, hold, "No-quorum node is still running. Press Enter to stop it...")
+        pause_before_stop(pause, step, hold, "No-quorum node is still running. Press Enter to stop it...")
     finally:
         stop_all()
         time.sleep(1)
@@ -612,7 +649,7 @@ def demo_leader_failure(binary: str, base_port: int, pause=False, step=False, ho
     ports = [base_port + 150 + i for i in range(5)]
     data_dir = f"/tmp/p2p-demo-leader-failure-{datetime.now().strftime('%H%M%S')}"
 
-    section("DEMO 5: Leader failure", "consensus has quorum, but the current protocol stalls because there is no view-change")
+    section("DEMO 6: Leader failure", "consensus has quorum, but the current protocol stalls because there is no view-change")
     print_scan_hint(ports, "leader failure", base_port)
 
     try:
@@ -653,7 +690,7 @@ def demo_leader_failure(binary: str, base_port: int, pause=False, step=False, ho
             "green" if stalled else "red",
         )
 
-        pause_before_stop(step, hold, "Survivor cluster is still running. Press Enter to stop it...")
+        pause_before_stop(pause, step, hold, "Survivor cluster is still running. Press Enter to stop it...")
     finally:
         stop_all()
         time.sleep(1)
@@ -664,7 +701,7 @@ def demo_scale(binary: str, base_port: int, node_count=30, tx_count=30, pause=Fa
     data_dir = f"/tmp/p2p-demo-scale-{node_count}-{datetime.now().strftime('%H%M%S')}"
 
     section(
-        f"DEMO 6: Scale - {node_count} consensus nodes",
+        f"DEMO 7: Scale - {node_count} consensus nodes",
         f"posts {tx_count} transactions and waits for one shared ledger",
     )
     print_scan_hint(ports, "scale", base_port)
@@ -697,7 +734,7 @@ def demo_scale(binary: str, base_port: int, node_count=30, tx_count=30, pause=Fa
             "green" if passed else "red",
         )
 
-        pause_before_stop(step, hold, "Scale cluster is still running. Press Enter to stop it...")
+        pause_before_stop(pause, step, hold, "Scale cluster is still running. Press Enter to stop it...")
     finally:
         stop_all()
         time.sleep(1)
@@ -712,7 +749,16 @@ def parse_args():
     parser.add_argument("--base-port", type=int, default=BASE_PORT)
     parser.add_argument(
         "--scenario",
-        choices=["all", "divergence", "converge", "bad-actor", "no-quorum", "leader-failure", "scale"],
+        choices=[
+            "all",
+            "moderate",
+            "divergence",
+            "converge",
+            "bad-actor",
+            "no-quorum",
+            "leader-failure",
+            "scale",
+        ],
         default="all",
     )
     parser.add_argument(
@@ -793,6 +839,14 @@ def main():
         return args.hold and args.scenario in ("all", name)
 
     try:
+        if args.scenario in ("all", "moderate"):
+            demo_moderate_consensus(
+                args.binary,
+                args.base_port,
+                pause=pause,
+                step=args.step,
+                hold=hold_for("moderate"),
+            )
         if args.scenario in ("all", "divergence"):
             demo_divergence(
                 args.binary,
