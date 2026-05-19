@@ -1,17 +1,20 @@
-use crate::http::read_request;
-use crate::routes::{
-    handle_addr, handle_announce, handle_debug_faults, handle_experiments_page, handle_get_blocks,
-    handle_get_blocks_from, handle_get_consensus_commits, handle_get_consensus_proposal,
-    handle_get_data, handle_get_ledger, handle_index, handle_ledger_status, handle_not_found,
-    handle_options, handle_ping, handle_post_block, handle_post_consensus_commit, handle_post_inv,
-    handle_post_tx, handle_status,
-};
-use crate::state::NodeState;
-use std::sync::{Arc, Mutex};
-use std::thread;
 use std::{
     io::Result,
     net::{TcpListener, TcpStream},
+    sync::{Arc, Mutex},
+    thread,
+};
+
+use crate::{
+    http::read_request,
+    routes::{
+        handle_balances, handle_chain, handle_chain_status, handle_create_transaction,
+        handle_debug_faults, handle_events, handle_get_block, handle_get_peers,
+        handle_get_transactions, handle_hashes, handle_mine, handle_mining_status,
+        handle_not_found, handle_options, handle_ping, handle_post_block, handle_post_peers,
+        handle_post_transaction, handle_status, handle_wallet,
+    },
+    state::NodeState,
 };
 
 fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
@@ -22,42 +25,27 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<
         .map_or(request.path.as_str(), |(path, _)| path);
 
     match (request.method.as_str(), path) {
-        ("GET", "/") | ("GET", "/index.html") => handle_index(stream),
-        ("GET", "/experiments") | ("GET", "/experiments.html") => handle_experiments_page(stream),
-        ("GET", "/ping") => handle_ping(stream, request),
-        ("GET", "/addr") => handle_addr(stream, state),
-        ("POST", "/peers/announce") => handle_announce(stream, state, request.body),
-        ("GET", "/getblocks") => handle_get_blocks(stream, state),
-        ("GET", path) if path.starts_with("/getdata/") => {
-            let hash = path.trim_start_matches("/getdata/");
-            handle_get_data(stream, state, hash)
-        }
-        ("POST", "/block") => handle_post_block(stream, state, request.body),
-        ("GET", path) if path.starts_with("/getblocks/") => {
-            let hash = path.trim_start_matches("/getblocks/");
-            handle_get_blocks_from(stream, state, hash)
-        }
-        ("POST", "/inv") => handle_post_inv(stream, state, request.body),
-        ("POST", "/tx") => handle_post_tx(stream, state, request.body),
-        ("GET", "/ledger") => handle_get_ledger(stream, state),
-        ("GET", "/ledger/status") => handle_ledger_status(stream, state),
-        ("GET", path) if path.starts_with("/consensus/proposal/") => {
-            let round = path
-                .trim_start_matches("/consensus/proposal/")
-                .parse()
-                .unwrap_or(0);
-            handle_get_consensus_proposal(stream, state, round)
-        }
-        ("POST", "/consensus/commit") => handle_post_consensus_commit(stream, state, request.body),
-        ("GET", path) if path.starts_with("/consensus/commits/") => {
-            let from_round = path
-                .trim_start_matches("/consensus/commits/")
-                .parse()
-                .unwrap_or(0);
-            handle_get_consensus_commits(stream, state, from_round)
-        }
-        ("POST", "/debug/faults") => handle_debug_faults(stream, state, request.body),
+        ("GET", "/ping") => handle_ping(stream),
         ("GET", "/status") => handle_status(stream, state),
+        ("GET", "/peers") => handle_get_peers(stream, state),
+        ("POST", "/peers") => handle_post_peers(stream, state, request),
+        ("GET", "/wallet") => handle_wallet(stream, state),
+        ("POST", "/transactions/create") => handle_create_transaction(stream, state, request.body),
+        ("POST", "/transactions") => handle_post_transaction(stream, state, request.body),
+        ("GET", "/transactions") => handle_get_transactions(stream, state),
+        ("POST", "/mine") => handle_mine(stream, state, request.body),
+        ("GET", "/mining/status") => handle_mining_status(stream, state),
+        ("POST", "/blocks") => handle_post_block(stream, state, request.body),
+        ("GET", path) if path.starts_with("/blocks/") => {
+            let hash = path.trim_start_matches("/blocks/");
+            handle_get_block(stream, state, hash)
+        }
+        ("GET", "/hashes") => handle_hashes(stream, state),
+        ("GET", "/chain") => handle_chain(stream, state),
+        ("GET", "/chain/status") => handle_chain_status(stream, state),
+        ("GET", "/balances") => handle_balances(stream, state),
+        ("GET", "/events") => handle_events(stream, state),
+        ("POST", "/debug/faults") => handle_debug_faults(stream, state, request.body),
         ("OPTIONS", _) => handle_options(stream),
         _ => handle_not_found(stream),
     }
@@ -69,10 +57,13 @@ pub fn start(state: Arc<Mutex<NodeState>>) -> Result<()> {
 
     for stream in listener.incoming() {
         let node = state.clone();
-        thread::spawn(move || {
-            if let Err(e) = handle_client(stream.unwrap(), node) {
-                println!("Error handling client: {}", e);
+        thread::spawn(move || match stream {
+            Ok(stream) => {
+                if let Err(error) = handle_client(stream, node) {
+                    eprintln!("request failed: {error}");
+                }
             }
+            Err(error) => eprintln!("connection failed: {error}"),
         });
     }
 

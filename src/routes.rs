@@ -2,86 +2,219 @@ use std::{
     io::{Error, ErrorKind, Result, Write},
     net::TcpStream,
     sync::{Arc, Mutex},
-    thread,
 };
 
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
-    client::{forward_block, forward_inv, post_commit},
-    consensus::{apply_commit, build_proposal, validate_commit_for_state},
-    crypto::calculate_hash,
-    http::{Request, reply, reply_html},
-    ledger::{IngestResult, create_local_transaction, ingest_transaction},
-    models::{Commit, Transaction},
+    chain::{self, BlockAddStatus},
+    client,
+    crypto::short_hash,
+    http::{Request, reply},
+    mining,
+    models::{Block, SignedTransaction},
     state::NodeState,
-    storage::{persist_commit, write_ledger},
+    storage, transaction,
 };
 
-pub fn handle_ping(stream: TcpStream, request: Request) -> Result<()> {
-    let addr = request.node_addr().unwrap_or("");
-    println!("ping: {addr}");
-    reply(stream, 200, "".to_string())
+#[derive(Deserialize)]
+struct CreateTransactionRequest {
+    to: String,
+    amount: u64,
+    memo: Option<String>,
 }
 
-pub fn handle_addr(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
-    let peers = state.lock().unwrap().peers.clone();
-    let peers_json = serde_json::to_string(&peers).map_err(|e| Error::new(ErrorKind::Other, e))?;
-    reply(stream, 200, peers_json)
+#[derive(Deserialize)]
+struct MineRequest {
+    blocks: Option<u64>,
+    max_txs: Option<usize>,
 }
 
-pub fn handle_announce(
-    stream: TcpStream,
-    state: Arc<Mutex<NodeState>>,
-    peer_json: String,
-) -> Result<()> {
-    println!("anno: {}", stream.peer_addr().unwrap());
-    let json: Value = serde_json::from_str(&peer_json)?;
-    let peer = json["address"]
-        .as_str()
-        .ok_or(Error::new(ErrorKind::InvalidData, "missing address"))?;
-
-    let peers_json = {
-        let mut node = state.lock().unwrap();
-        if peer != node.addr && !node.peers.contains(&peer.to_string()) {
-            node.peers.push(peer.to_string());
-        }
-        serde_json::to_string(&node.peers).map_err(|e| Error::new(ErrorKind::Other, e))?
-    };
-    reply(stream, 200, peers_json)
+pub fn handle_ping(stream: TcpStream) -> Result<()> {
+    reply(stream, 200, "{}".to_string())
 }
 
-pub fn handle_not_found(stream: TcpStream) -> Result<()> {
-    reply(stream, 404, "".to_string())
-}
-
-pub fn handle_index(stream: TcpStream) -> Result<()> {
-    reply_html(stream, 200, include_str!("../index.html").to_string())
-}
-
-pub fn handle_experiments_page(stream: TcpStream) -> Result<()> {
-    reply_html(stream, 200, include_str!("../experiments.html").to_string())
-}
-
-pub fn handle_get_blocks(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
-    let blocks: Vec<String> = state.lock().unwrap().blocks.keys().cloned().collect();
-    let body = serde_json::to_string(&blocks).map_err(|e| Error::new(ErrorKind::Other, e))?;
+pub fn handle_status(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let body = state.lock().unwrap().status_json().to_string();
     reply(stream, 200, body)
 }
 
-pub fn handle_get_data(stream: TcpStream, state: Arc<Mutex<NodeState>>, hash: &str) -> Result<()> {
-    let blocks = state.lock().unwrap().blocks.clone();
-    match blocks.get(hash) {
-        Some(content) => {
-            let body = serde_json::json!({
-                "hash": hash,
-                "content": content,
-            })
-            .to_string();
-            reply(stream, 200, body)
+pub fn handle_get_peers(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let peers = state.lock().unwrap().peers.clone();
+    reply_json(stream, &peers)
+}
+
+pub fn handle_post_peers(
+    stream: TcpStream,
+    state: Arc<Mutex<NodeState>>,
+    request: Request,
+) -> Result<()> {
+    let peers = match parse_peer_request(&request) {
+        Ok(peers) => peers,
+        Err(error) => return bad_request(stream, error),
+    };
+    {
+        let mut node = state.lock().unwrap();
+        let mut changed = false;
+        for peer in peers {
+            if peer != node.addr && !node.peers.contains(&peer) {
+                node.record_event("peer", format!("discovered {peer}"));
+                node.peers.push(peer);
+                changed = true;
+            }
         }
-        None => reply(stream, 404, r#"{"error": "block not found"}"#.to_string()),
+        if changed {
+            node.peers.sort();
+            node.peers.dedup();
+            storage::persist_peers(&node)?;
+        }
     }
+    let body = state.lock().unwrap().peers.clone();
+    reply_json(stream, &body)
+}
+
+pub fn handle_wallet(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let public_key = state.lock().unwrap().wallet.public_key.clone();
+    reply(
+        stream,
+        200,
+        serde_json::json!({ "public_key": public_key }).to_string(),
+    )
+}
+
+pub fn handle_create_transaction(
+    stream: TcpStream,
+    state: Arc<Mutex<NodeState>>,
+    body: String,
+) -> Result<()> {
+    let request: CreateTransactionRequest = match serde_json::from_str(&body) {
+        Ok(request) => request,
+        Err(error) => return bad_request(stream, format!("invalid transaction request: {error}")),
+    };
+
+    let tx = {
+        let mut node = state.lock().unwrap();
+        let tx = match transaction::create_signed_transaction(
+            &node.wallet,
+            request.to,
+            request.amount,
+            request.memo.unwrap_or_default(),
+        ) {
+            Ok(tx) => tx,
+            Err(error) => return bad_request(stream, error),
+        };
+        match chain::add_transaction_to_mempool(&mut node.chain, tx.clone()) {
+            Ok(true) => {
+                storage::persist_mempool(&node)?;
+                node.record_event("tx", tx_event_message("accepted", &tx));
+            }
+            Ok(false) => {}
+            Err(error) => return bad_request(stream, error),
+        }
+        tx
+    };
+
+    reply_json(stream, &tx)?;
+    client::broadcast_transaction(tx, state);
+    Ok(())
+}
+
+pub fn handle_post_transaction(
+    stream: TcpStream,
+    state: Arc<Mutex<NodeState>>,
+    body: String,
+) -> Result<()> {
+    let tx: SignedTransaction = match serde_json::from_str(&body) {
+        Ok(tx) => tx,
+        Err(error) => return bad_request(stream, format!("invalid transaction: {error}")),
+    };
+
+    let accepted = {
+        let mut node = state.lock().unwrap();
+        match chain::add_transaction_to_mempool(&mut node.chain, tx.clone()) {
+            Ok(true) => {
+                storage::persist_mempool(&node)?;
+                node.record_event("tx", tx_event_message("accepted", &tx));
+                true
+            }
+            Ok(false) => false,
+            Err(error) => {
+                node.record_event("tx", format!("rejected reason=\"{error}\""));
+                return bad_request(stream, error);
+            }
+        }
+    };
+
+    let status = if accepted {
+        "accepted"
+    } else {
+        "already_known"
+    };
+    reply(
+        stream,
+        200,
+        serde_json::json!({ "status": status }).to_string(),
+    )?;
+    if accepted {
+        client::broadcast_transaction(tx, state);
+    }
+    Ok(())
+}
+
+pub fn handle_get_transactions(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let txs: Vec<SignedTransaction> = state
+        .lock()
+        .unwrap()
+        .chain
+        .mempool
+        .values()
+        .cloned()
+        .collect();
+    reply_json(stream, &txs)
+}
+
+pub fn handle_mine(stream: TcpStream, state: Arc<Mutex<NodeState>>, body: String) -> Result<()> {
+    let request = if body.trim().is_empty() {
+        MineRequest {
+            blocks: Some(1),
+            max_txs: Some(50),
+        }
+    } else {
+        match serde_json::from_str::<MineRequest>(&body) {
+            Ok(request) => request,
+            Err(error) => return bad_request(stream, format!("invalid mine request: {error}")),
+        }
+    };
+    let blocks = request.blocks.unwrap_or(1).max(1);
+    let max_txs = request.max_txs.unwrap_or(50);
+
+    let mined = match mining::mine_blocks(state.clone(), blocks, max_txs) {
+        Ok(blocks) => blocks,
+        Err(error) => return bad_request(stream, error),
+    };
+    let hashes: Vec<String> = mined.iter().map(|block| block.hash.clone()).collect();
+
+    reply(
+        stream,
+        200,
+        serde_json::json!({
+            "status": "mined",
+            "count": mined.len(),
+            "blocks": hashes,
+        })
+        .to_string(),
+    )?;
+
+    for block in mined {
+        client::broadcast_block(block, state.clone());
+    }
+    Ok(())
+}
+
+pub fn handle_mining_status(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let status = state.lock().unwrap().chain.mining.clone();
+    reply_json(stream, &status)
 }
 
 pub fn handle_post_block(
@@ -89,280 +222,106 @@ pub fn handle_post_block(
     state: Arc<Mutex<NodeState>>,
     body: String,
 ) -> Result<()> {
-    let json: Value = serde_json::from_str(&body).map_err(|e| Error::new(ErrorKind::Other, e))?;
-    let hash = json["hash"]
-        .as_str()
-        .ok_or(Error::new(ErrorKind::InvalidData, "missing hash"))?;
-    let content = json["content"]
-        .as_str()
-        .ok_or(Error::new(ErrorKind::InvalidData, "missing content"))?;
-
-    let already_have = state.lock().unwrap().blocks.contains_key(hash);
-    if already_have {
-        return reply(stream, 200, r#"{"status": "already have it"}"#.to_string());
-    }
-
-    let calculated_hash = calculate_hash(content);
-    if calculated_hash != hash {
-        return reply(stream, 400, r#"{"error": "invalid hash"}"#.to_string());
-    }
-
-    state
-        .lock()
-        .unwrap()
-        .blocks
-        .insert(hash.to_string(), content.to_string());
-    println!("Stored block {hash}");
-
-    reply(stream, 200, r#"{"status": "ok"}"#.to_string())?;
-
-    let peers = state.lock().unwrap().peers.clone();
-    let state = state.clone();
-    thread::spawn(move || {
-        for peer in peers {
-            let _ = forward_block(&peer, &body, &state);
-        }
-    });
-
-    Ok(())
-}
-
-pub fn handle_get_blocks_from(
-    stream: TcpStream,
-    state: Arc<Mutex<NodeState>>,
-    from_hash: &str,
-) -> Result<()> {
-    let blocks = state.lock().unwrap().blocks.clone();
-    let keys: Vec<String> = blocks
-        .keys()
-        .skip_while(|k| k.as_str() != from_hash)
-        .cloned()
-        .collect();
-    let body = serde_json::to_string(&keys).map_err(|e| Error::new(ErrorKind::Other, e))?;
-    reply(stream, 200, body)
-}
-
-pub fn handle_post_tx(stream: TcpStream, state: Arc<Mutex<NodeState>>, body: String) -> Result<()> {
-    let json: Value = serde_json::from_str(&body).map_err(|e| Error::new(ErrorKind::Other, e))?;
-    let tx_body = json["body"]
-        .as_str()
-        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "missing body"))?
-        .to_string();
-
-    let (tx, should_forward, peers, forward_body) = {
-        let mut node = state.lock().unwrap();
-        let tx = create_local_transaction(&mut node, tx_body)
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-        ingest_transaction(&mut node, tx.clone())
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-
-        if !node.consensus_enabled {
-            write_ledger(&node)?;
-        }
-
-        let should_forward = node.forward_inv_enabled;
-        let peers = node.peers.clone();
-        let forward_body =
-            serde_json::to_string(&tx).map_err(|e| Error::new(ErrorKind::Other, e))?;
-        (tx, should_forward, peers, forward_body)
-    };
-
-    let response = serde_json::json!({
-        "status": "ok",
-        "tx": tx,
-    })
-    .to_string();
-    reply(stream, 200, response)?;
-
-    if should_forward {
-        let state = state.clone();
-        thread::spawn(move || {
-            for peer in peers {
-                if let Err(e) = forward_inv(&peer, &forward_body, &state) {
-                    println!("failed to forward transaction to {peer}: {e}");
-                }
-            }
-        });
-    }
-
-    Ok(())
-}
-
-pub fn handle_post_inv(
-    stream: TcpStream,
-    state: Arc<Mutex<NodeState>>,
-    body: String,
-) -> Result<()> {
-    let json: Value = serde_json::from_str(&body).map_err(|e| Error::new(ErrorKind::Other, e))?;
-    let tx: Transaction = match serde_json::from_value(json) {
-        Ok(tx) => tx,
-        Err(e) => {
+    let block: Block = match serde_json::from_str(&body) {
+        Ok(block) => block,
+        Err(error) => {
             return reply(
                 stream,
                 400,
                 serde_json::json!({
-                    "error": format!("invalid transaction format: {e}")
+                    "status": "rejected",
+                    "error": format!("invalid block: {error}")
                 })
                 .to_string(),
             );
         }
     };
 
-    let (status, should_forward, peers) = {
-        let mut node = state.lock().unwrap();
-        let result = match ingest_transaction(&mut node, tx) {
-            Ok(result) => result,
-            Err(e) => {
-                return reply(
-                    stream,
-                    400,
-                    serde_json::json!({ "error": format!("invalid transaction: {e}") }).to_string(),
-                );
-            }
-        };
-
-        if !node.consensus_enabled && result == IngestResult::Accepted {
-            write_ledger(&node)?;
-        }
-
-        let status = match result {
-            IngestResult::Accepted => "ok",
-            IngestResult::AlreadyKnown => "already have it",
-        };
-
-        (
-            status.to_string(),
-            node.forward_inv_enabled && result == IngestResult::Accepted,
-            node.peers.clone(),
-        )
-    };
-
-    reply(
-        stream,
-        200,
-        serde_json::json!({ "status": status }).to_string(),
-    )?;
-
-    if should_forward {
-        let state = state.clone();
-        thread::spawn(move || {
-            for peer in peers {
-                if let Err(e) = forward_inv(&peer, &body, &state) {
-                    println!("failed to forward transaction to {peer}: {e}");
-                }
-            }
-        });
-    }
-
-    Ok(())
-}
-
-pub fn handle_get_ledger(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
-    let ledger = state.lock().unwrap().ledger.clone();
-    let body = serde_json::to_string(&ledger).map_err(|e| Error::new(ErrorKind::Other, e))?;
-    reply(stream, 200, body)
-}
-
-pub fn handle_ledger_status(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
-    let node = state.lock().unwrap();
-    let body = ledger_status_json(&node).to_string();
-    reply(stream, 200, body)
-}
-
-pub fn handle_get_consensus_proposal(
-    stream: TcpStream,
-    state: Arc<Mutex<NodeState>>,
-    round: u64,
-) -> Result<()> {
-    let proposal = {
-        let node = state.lock().unwrap();
-        build_proposal(&node, round)
-    };
-    let body = serde_json::to_string(&proposal).map_err(|e| Error::new(ErrorKind::Other, e))?;
-    reply(stream, 200, body)
-}
-
-pub fn handle_post_consensus_commit(
-    stream: TcpStream,
-    state: Arc<Mutex<NodeState>>,
-    body: String,
-) -> Result<()> {
-    let commit: Commit = match serde_json::from_str(&body) {
-        Ok(commit) => commit,
-        Err(e) => {
-            return reply(
-                stream,
-                400,
-                serde_json::json!({ "error": format!("invalid commit format: {e}") }).to_string(),
-            );
-        }
-    };
-
-    let mut peers = Vec::new();
-    let mut accepted = false;
+    let mut added_for_broadcast = Vec::new();
     let response = {
         let mut node = state.lock().unwrap();
-        match validate_commit_for_state(&node, &commit) {
-            Ok(()) if commit.payload.round < node.next_round => {
-                serde_json::json!({ "status": "already_committed" })
+        let difficulty = node.config.difficulty;
+        match chain::add_block(&mut node.chain, block.clone(), difficulty) {
+            Ok(outcome) => {
+                if outcome.status == BlockAddStatus::Added {
+                    client::handle_block_outcome_events(&mut node, &outcome);
+                    for added in &outcome.added_blocks {
+                        storage::persist_block(&node, added)?;
+                    }
+                    storage::persist_mempool(&node)?;
+                    storage::persist_chain_outputs(&node)?;
+                    added_for_broadcast = outcome.added_blocks.clone();
+                } else if outcome.status == BlockAddStatus::Orphan {
+                    node.record_event(
+                        "block",
+                        format!(
+                            "orphan hash={} waiting_for={}",
+                            short_hash(&block.hash),
+                            short_hash(&block.header.previous_hash)
+                        ),
+                    );
+                }
+                serde_json::json!({ "status": outcome.status.as_str() })
             }
-            Ok(()) => {
-                apply_commit(&mut node, commit.clone())
-                    .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-                persist_commit(&node, &commit)?;
-                peers = node.peers.clone();
-                accepted = true;
-                serde_json::json!({ "status": "ok" })
-            }
-            Err(e) if is_conflict_error(&e) => {
-                let body = serde_json::json!({
-                    "error": e,
-                    "ledger_hash": node.ledger_hash,
-                    "next_round": node.next_round,
-                });
-                return reply(stream, 409, body.to_string());
-            }
-            Err(e) => {
+            Err(error) => {
+                node.record_event("block", format!("rejected reason=\"{error}\""));
                 return reply(
                     stream,
                     400,
-                    serde_json::json!({ "error": format!("bad commit: {e}") }).to_string(),
+                    serde_json::json!({ "status": "rejected", "error": error }).to_string(),
                 );
             }
         }
     };
 
     reply(stream, 200, response.to_string())?;
-
-    if accepted {
-        let state = state.clone();
-        thread::spawn(move || {
-            for peer in peers {
-                if let Err(e) = post_commit(&peer, &commit, &state) {
-                    println!("failed to forward commit to {peer}: {e}");
-                }
-            }
-        });
+    for block in added_for_broadcast {
+        client::broadcast_block(block, state.clone());
     }
-
     Ok(())
 }
 
-pub fn handle_get_consensus_commits(
-    stream: TcpStream,
-    state: Arc<Mutex<NodeState>>,
-    from_round: u64,
-) -> Result<()> {
-    let commits: Vec<Commit> = {
-        let node = state.lock().unwrap();
-        node.commits
-            .iter()
-            .filter(|commit| commit.payload.round >= from_round)
-            .cloned()
-            .collect()
-    };
-    let body = serde_json::to_string(&commits).map_err(|e| Error::new(ErrorKind::Other, e))?;
-    reply(stream, 200, body)
+pub fn handle_get_block(stream: TcpStream, state: Arc<Mutex<NodeState>>, hash: &str) -> Result<()> {
+    let block = state
+        .lock()
+        .unwrap()
+        .chain
+        .blocks
+        .get(hash)
+        .map(|stored| stored.block.clone());
+    match block {
+        Some(block) => reply_json(stream, &block),
+        None => reply(
+            stream,
+            404,
+            serde_json::json!({ "error": "block not found" }).to_string(),
+        ),
+    }
+}
+
+pub fn handle_hashes(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let hashes = chain::canonical_hashes(&state.lock().unwrap().chain);
+    reply_json(stream, &hashes)
+}
+
+pub fn handle_chain(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let blocks = chain::canonical_blocks(&state.lock().unwrap().chain);
+    reply_json(stream, &blocks)
+}
+
+pub fn handle_chain_status(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let status = chain::chain_status_json(&state.lock().unwrap().chain);
+    reply(stream, 200, status.to_string())
+}
+
+pub fn handle_balances(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let balances = chain::balances_for_best(&state.lock().unwrap().chain);
+    reply_json(stream, &balances)
+}
+
+pub fn handle_events(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
+    let events: Vec<_> = state.lock().unwrap().events.iter().cloned().collect();
+    reply_json(stream, &events)
 }
 
 pub fn handle_debug_faults(
@@ -370,72 +329,52 @@ pub fn handle_debug_faults(
     state: Arc<Mutex<NodeState>>,
     body: String,
 ) -> Result<()> {
-    let json: Value = serde_json::from_str(&body).map_err(|e| Error::new(ErrorKind::Other, e))?;
+    let json: Value = match serde_json::from_str(&body) {
+        Ok(value) => value,
+        Err(error) => return bad_request(stream, format!("invalid debug request: {error}")),
+    };
 
-    let status = {
+    let response = {
         let mut node = state.lock().unwrap();
 
-        if let Some(enabled) = json
-            .get("forward_inv_enabled")
+        if json
+            .get("clear_blocked_peers")
             .and_then(|value| value.as_bool())
+            .unwrap_or(false)
         {
-            node.forward_inv_enabled = enabled;
+            node.chain.blocked_peers.clear();
+            node.record_event("peer", "cleared blocked peers");
         }
 
         if let Some(peer) = json.get("block_peer").and_then(|value| value.as_str()) {
             if peer != node.addr {
-                node.blocked_peers.insert(peer.to_string());
+                node.chain.blocked_peers.insert(peer.to_string());
+                node.record_event("peer", format!("blocked {peer}"));
             }
         }
 
         if let Some(peer) = json.get("unblock_peer").and_then(|value| value.as_str()) {
-            node.blocked_peers.remove(peer);
+            node.chain.blocked_peers.remove(peer);
+            node.record_event("peer", format!("unblocked {peer}"));
         }
 
+        let mut blocked: Vec<String> = node.chain.blocked_peers.iter().cloned().collect();
+        blocked.sort();
         serde_json::json!({
             "status": "ok",
-            "forward_inv_enabled": node.forward_inv_enabled,
-            "blocked_peers": sorted_blocked_peers(&node),
+            "blocked_peers": blocked,
         })
     };
 
-    reply(stream, 200, status.to_string())
+    reply(stream, 200, response.to_string())
 }
 
-pub fn handle_status(stream: TcpStream, state: Arc<Mutex<NodeState>>) -> Result<()> {
-    let node = state.lock().unwrap();
-    let body = ledger_status_json(&node).to_string();
-    reply(stream, 200, body)
-}
-
-fn sorted_blocked_peers(node: &NodeState) -> Vec<String> {
-    let mut peers: Vec<String> = node.blocked_peers.iter().cloned().collect();
-    peers.sort();
-    peers
-}
-
-fn is_conflict_error(error: &str) -> bool {
-    error.contains("ledger hash mismatch")
-        || error.contains("does not match next round")
-        || error.contains("conflicts with already committed")
-}
-
-fn ledger_status_json(node: &NodeState) -> Value {
-    serde_json::json!({
-        "addr": node.addr,
-        "peers": node.peers,
-        "block_count": node.blocks.len(),
-        "ledger_len": node.ledger.len(),
-        "ledger_hash": node.ledger_hash,
-        "next_round": node.next_round,
-        "mempool_count": node.tx_pool.len(),
-        "commit_count": node.commits.len(),
-        "consensus_enabled": node.consensus_enabled,
-        "forward_inv_enabled": node.forward_inv_enabled,
-        "round_secs": node.round_secs,
-        "data_dir": node.data_dir,
-        "blocked_peer_count": node.blocked_peers.len(),
-    })
+pub fn handle_not_found(stream: TcpStream) -> Result<()> {
+    reply(
+        stream,
+        404,
+        serde_json::json!({ "error": "not found" }).to_string(),
+    )
 }
 
 pub fn handle_options(mut stream: TcpStream) -> Result<()> {
@@ -446,4 +385,49 @@ pub fn handle_options(mut stream: TcpStream) -> Result<()> {
         Content-Length: 0\r\n\
         \r\n";
     stream.write_all(response.as_bytes())
+}
+
+fn parse_peer_request(request: &Request) -> Result<Vec<String>> {
+    if request.body.trim().is_empty() {
+        return Ok(request
+            .node_addr()
+            .map(|addr| vec![addr.to_string()])
+            .unwrap_or_default());
+    }
+
+    let json: Value =
+        serde_json::from_str(&request.body).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+    if let Some(address) = json.get("address").and_then(|value| value.as_str()) {
+        return Ok(vec![address.to_string()]);
+    }
+    if let Some(array) = json.as_array() {
+        return Ok(array
+            .iter()
+            .filter_map(|value| value.as_str().map(ToString::to_string))
+            .collect());
+    }
+    Err(Error::new(ErrorKind::InvalidData, "missing peer address"))
+}
+
+fn tx_event_message(action: &str, tx: &SignedTransaction) -> String {
+    format!(
+        "{action} id={} from={} to={} amount={}",
+        short_hash(&tx.id),
+        short_hash(&tx.payload.from),
+        short_hash(&tx.payload.to),
+        tx.payload.amount
+    )
+}
+
+fn reply_json<T: serde::Serialize>(stream: TcpStream, value: &T) -> Result<()> {
+    let body = serde_json::to_string(value).map_err(|e| Error::new(ErrorKind::Other, e))?;
+    reply(stream, 200, body)
+}
+
+fn bad_request(stream: TcpStream, error: impl ToString) -> Result<()> {
+    reply(
+        stream,
+        400,
+        serde_json::json!({ "error": error.to_string() }).to_string(),
+    )
 }
