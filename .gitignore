@@ -1,8 +1,11 @@
 /target
-peers*
+ledger_data/
+ledger_runs/
+ledger_manual/
 notes.md
 prax1.md
 prax2.md
 prax2_results/
 __pycache__/
+*.log
 .codex
