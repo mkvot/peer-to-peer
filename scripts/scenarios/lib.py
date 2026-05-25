@@ -144,7 +144,7 @@ class Scenario:
             print(extra)
         wait_for_enter("Press Enter to start...")
 
-    def start_nodes(self, ports, peer_map=None):
+    def start_nodes(self, ports, peer_map=None, timeout=20):
         self.ports = ports
         for port in ports:
             peers = []
@@ -171,19 +171,19 @@ class Scenario:
             )
             self.processes[port] = proc
 
-        if not self.wait_online(ports, timeout=20):
+        if not self.wait_online(ports, timeout=timeout):
             self.note("error", "not all nodes came online before timeout")
             raise RuntimeError("nodes did not start")
 
     def start_isolated(self, ports):
         self.start_nodes(ports, peer_map={port: [] for port in ports})
 
-    def start_seeded(self, ports):
+    def start_seeded(self, ports, timeout=20):
         first = ports[0]
         peer_map = {first: []}
         for port in ports[1:]:
             peer_map[port] = [first]
-        self.start_nodes(ports, peer_map)
+        self.start_nodes(ports, peer_map, timeout=timeout)
 
     def start_fully_connected(self, ports):
         peer_map = {port: [peer for peer in ports if peer != port] for port in ports}
