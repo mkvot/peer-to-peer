@@ -197,10 +197,6 @@ pub fn reply(stream: TcpStream, status: u16, body: String) -> Result<()> {
     reply_with_content_type(stream, status, "application/json", body)
 }
 
-pub fn reply_html(stream: TcpStream, status: u16, body: String) -> Result<()> {
-    reply_with_content_type(stream, status, "text/html; charset=utf-8", body)
-}
-
 fn reply_with_content_type(
     mut stream: TcpStream,
     status: u16,

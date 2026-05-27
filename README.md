@@ -1,345 +1,183 @@
+# Peer-to-Peer Mined Ledger
 
-# ITI0215_26 Hajussüsteemid
+Small peer-to-peer ledger using simplified Nakamoto consensus:
+proof-of-work mining, signed transactions, fork storage, and deterministic longest-chain selection.
 
-## Praktikum 1
-
-## Installeerimine ja käivitamine
-
-Rakenduse käivitamiseks on vaja Rust-i kompilaatorit: [https://rustup.rs/](https://rustup.rs/)
-
-### Käivitamine
-```bash
-cargo run -- <port> [options]
-
-# loob konsensusega sõlme pordil 5000
-cargo run -- 5000 --data-dir /tmp/p2p-demo
-
-# loob uue sõlme koos teadaoleva peeriga
-cargo run -- 5001 --peer 127.0.0.1:5000 --data-dir /tmp/p2p-demo
-
-# sama port teises masinas; peerile võib anda ainult IP
-cargo run -- 5000 --advertise-ip 192.168.1.42 --peer 192.168.1.10
-```
-
-Rohkem näiteid on failis [`cli.md`](cli.md).
-
-## Võrgu topoloogia
-
-Iga sõlm käitub serveri ja kliendina, pole keskset sõlme:
-- server: kuulab sissetulevaid päringuid.
-- klient: pöördub perioodiliselt teiste sõlmede poole.
-
-Võrguga liitumiseks peab uuel sõlmel olema vähemalt ühe juba töötava sõlme aadress (`--peer` või `--peers-file`). Sõlmed jagavad omavahel infot juba teadaolevatest sõlmedest võrgus ning vajadusel uuendavad enda infot.
-
-## Protokolli kirjeldus
-
-### `GET /status`
-Tagastab sõlme hetkeseisu: aadressi, naabrite nimekirja ning plokkide ja ledgeri seisu.
-
-```bash
-curl http://127.0.0.1:5000/status
-```
-
-```json
-{
-  "addr": "127.0.0.1:5000",
-  "peers": ["127.0.0.1:5001", "127.0.0.1:5002"],
-  "block_count": 5,
-  "ledger_len": 3,
-  "ledger_hash": "72df...",
-  "mempool_count": 0
-}
-```
-
-### `GET /addr`
-Tagastab nimekirja kõigist sõlmele teadaolevatest naabritest.
-
-```bash
-curl http://127.0.0.1:5000/addr
-```
-
-```json
-["127.0.0.1:5001", "127.0.0.1:5002", "127.0.0.1:5003"]
-```
-
-### `POST /peers/announce`
-Sõlm reklaamib ennast teisele sõlmele. Vastuseks saab nimekirja kõigist teadaolevatest naabritest.
-
-```bash
-curl -X POST http://127.0.0.1:5000/peers/announce \
-  -d '{"address": "127.0.0.1:5005"}'
-```
-
-```json
-["127.0.0.1:5000", "127.0.0.1:5001", "127.0.0.1:5005"]
-```
-
-### `GET /getblocks`
-Tagastab nimekirja kõigi sõlmel olevate plokkide räsides (hash).
-
-```bash
-curl http://127.0.0.1:5000/getblocks
-```
-
-```json
-["b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9", "a3bc...", "ca3d..."]
-```
-
-### `GET /getblocks/{hash}`
-Tagastab plokkide räside nimekirja alates etteantud räsist.
-
-```bash
-curl http://127.0.0.1:5000/getblocks/f3a2...​
-```
-
-```json
-["77f44b9024fd19a6674a62d98939f4e7f1b77f64eac4c7559414c46bdaec494c", "01ca...", "asf2..."]
-```
-
-### `GET /getdata/{hash}`
-Tagastab konkreetse ploki sisu vastavalt etteantud räsile.
-
-```bash
-curl http://127.0.0.1:5000/getdata/f3a2...
-```
-
-```json
-{
-  "hash": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
-  "content": "hello"
-}
-```
-
-### `POST /tx`
-Loob selles sõlmes uue transaktsiooni. Sõlm lisab aadressi, järjenumbri ja deterministliku id.
-
-```bash
-curl -X POST http://127.0.0.1:5000/tx \
-  -d '{"body": "promise"}'
-```
-
-```json
-{
-  "status": "ok",
-  "tx": {
-    "id": "f26e...",
-    "origin": "127.0.0.1:5000",
-    "seq": 1,
-    "body": "promise"
-  }
-}
-```
-
-### `POST /inv`
-Saadab edasi juba loodud typed transaktsiooni. Räsi/sisu kujul vana formaat ei ole kasutusel.
-
-```json
-{
-  "id": "f26e...",
-  "origin": "127.0.0.1:5000",
-  "seq": 1,
-  "body": "promise"
-}
-```
-
-### `GET /ledger`
-Tagastab järjestatud ledgeri transaktsioonid.
-
-```bash
-curl http://127.0.0.1:5000/ledger
-```
-
-### `POST /block`
-Saadab uue ploki. Sõlm kontrollib, kas räsi klapib sisuga ning lisab ploki oma registrisse, kui seda veel seal pole.
-
-```bash
-curl -X POST http://127.0.0.1:5000/block \
-  -d '{
-    "hash": "90a7b08f76a1a33dc3e4c9decf39ff93a88918f1f46fd1b3fbf5edd619d77dc6",
-    "content": "block"
-  }'
-```
-
-```json
-{ "status": "ok" }
-```
-
-### `GET /ping`
-Tavaline ping, et kontrollida, kas sõlm on elus.
-
-```bash
-curl http://127.0.0.1:5000/ping
-```
-
-`200 OK`
-
-## Katsed
-
-Testid tegin läbi ühes arvutis, mitu protsessi eri portidel. Proovisin kohalikus võrgus luua sõlmesid, mis töötas, ehkki seda oli käsitsi üpriski tüütu teha. Testid on `test.py` failis.
-```bash
-python3 test.py                  # kõik testid
-python3 test.py --large          # 30 sõlme
-python3 test.py --large2         # 40 sõlme järkjärgult
-python3 test.py --scale          # limit test
-```
-
-### Tulemused
-
-| Test | Kirjeldus | Tulemus |
-|------|-----------|---------|
-| 1. Lineaarne ahel | 5 sõlme, plokk levib otspunktist otspunkti | ✓ |
-| 2. Täht-topoloogia | 1 "peamine" sõlm + 4 sõlme, plokk + transaktsioon | ✓ |
-| 3. Paaride ühendamine | 2 eraldatud paari liidetakse, plokk levib | ✓ |
-| 4. Sõlme eemaldamine | 6 sõlmest 2 eemaldatakse, ülejäänud 4 töötavad edasi | ✓ |
-| 5. Hiline liituja | uus sõlm liitub ja sünkroniseerib 3 olemasolevat plokki | ✓ |
-| 6. 30 sõlme | kõik 30 sõlme saavad 2 plokki kätte | ✓ |
-| 7. 40 sõlme järkjärgult | sõlmed liituvad ükshaaval, 5 plokki + 3 txn | ✓ |
-| 8. Limit test | sõlmi lisatakse kuni ploki levik on piisavalt madal | ✓ |
-
-### Limit test
-
-See test lisab 10 sõlme iga 12s tagant, siis saadab ploki ja vaatab selle levimist.
-
-Ühe testi tulemus:
-| Sõlmi | Levis | Levik% | Aeg |
-|-------|-------|--------|-----|
-| 11 | 11/11 | 100% | 0.0s |
-| 21 | 21/21 | 100% | 4.1s |
-| 31–101 | 100% | 100% | ~4.0–4.3s |
-| 111 | 111/111 | 100% | 56.4s |
-| 121 | 121/121 | 100% | 27.1s |
-| 131 | 131/131 | 100% | 61.3s |
-| 141 | 141/141 | 100% | 27.6s |
-| 150 | 149/150 | 99% | 35.0s |
-
-Praktiline piir: ~150 sõlme. Kuni 101 sõlmeni on levimine stabiilselt ~4s. Üle 100 sõlme hakkab levimisaeg kasvama ja muutub ebaühtlaseks (27–61s). 150 sõlme juures jõudis plokk 149/150 sõlmeni.
-Mõni test kukkus juba ~120 juures 0% levikuni, kuid ma pole kindel, mis seda põhjustas.
-
-## Praktikum 2
-
-### Käivituse seaded
-
-```bash
---no-consensus          # lülitab konsensuse välja
---forward-inv           # lülitab transaktsioonide gossip-forwardingu sisse
---data-dir data         # baaskaust püsivate ledgerite jaoks
---round-secs 5          # konsensuse roundi pikkus sekundites
---peer 127.0.0.1:9000   # lisab teadaoleva peer'i
---advertise-ip <ip>     # IP, mida teised masinad peaksid kasutama
-```
-
-Iga sõlm kirjutab enda andmed kausta:
-
-```text
-${data-dir}/${port}/
-```
-
-Olulised failid:
-
-- `ledger.json`: sõlme järjestatud kinnitatud transaktsioonid
-- `commits.jsonl`: konsensusega vastu võetud commitid, üks JSON rida iga roundi kohta
-
-### Konsensuse algoritm
-
-Kasutusel on lihtne permissioned rotating-king protokoll.
-
-1. Iga roundi liikmed on sorteeritud nimekiri: sõlm ise + teadaolevad peerid.
-2. Roundi juht on `members[round % members.len()]`.
-3. Juht küsib kõigilt liikmetelt `GET /consensus/proposal/{round}`.
-4. Arvesse lähevad ainult proposalid, mille `round` ja `ledger_hash` kattuvad juhi omaga.
-5. Kui proposalite arv on vähemalt enamus `members.len() / 2 + 1`, teeb juht commiti.
-6. Transaktsioonid deduplikeeritakse ja sorteeritakse deterministlikult `origin`, `seq`, `id` järgi.
-7. Commit võetakse vastu ainult siis, kui see laiendab kohalikku `ledger_hash` väärtust ja round vastab `next_round` väärtusele.
-8. Sõlmed, mis on roundist maha jäänud, saavad catch-up teha endpointist `GET /consensus/commits/{from_round}`.
-
-Piirang: liikmeskond tuleb dünaamilisest peer-listist ja signatuure ei ole.
-
-### Demo
+## Build
 
 ```bash
 cargo build
-
-./target/debug/peer-to-peer 9000 --data-dir /tmp/p2p-demo
-./target/debug/peer-to-peer 9001 --peer 127.0.0.1:9000 --data-dir /tmp/p2p-demo
-./target/debug/peer-to-peer 9002 --peer 127.0.0.1:9000 --data-dir /tmp/p2p-demo
 ```
 
-Teises terminalis:
+## Start Nodes
 
 ```bash
-curl -X POST http://127.0.0.1:9000/tx -d '{"body":"T from 9000"}'
-curl -X POST http://127.0.0.1:9001/tx -d '{"body":"T from 9001"}'
-curl -X POST http://127.0.0.1:9002/tx -d '{"body":"T from 9002"}'
+./target/debug/peer-to-peer 9000
+./target/debug/peer-to-peer 9001 --peers 127.0.0.1:9000
+./target/debug/peer-to-peer 9002 --peers 127.0.0.1:9000,127.0.0.1:9001
+```
 
-curl http://127.0.0.1:9000/ledger/status
-curl http://127.0.0.1:9001/ledger/status
-curl http://127.0.0.1:9002/ledger/status
+CLI options:
+
+```text
+--peers <addr,addr>       Add one or more peers.
+--bind-ip <ip>            Local bind address. Default: 127.0.0.1.
+--data-dir <path>         Base directory for per-node data. Default: ledger_data.
+--difficulty <n>          Leading-zero proof-of-work difficulty. Default: 4.
+```
+
+Nodes do not mine automatically. Mining starts only when `POST /mine` is called.
+
+## Wallets And Transactions
+
+Each node owns an Ed25519 wallet in its data directory:
+
+```text
+ledger_data/<port>/wallet.json
+```
+
+Transactions transfer integer amounts between public keys. A normal transaction signs canonical JSON of its payload, and its id is the SHA-256 hash of `canonical_json(payload) + signature`.
+
+Create a signed transaction from the local wallet:
+
+```bash
+curl -s http://127.0.0.1:9000/wallet
+curl -s -X POST http://127.0.0.1:9000/transactions/create \
+  -d '{"to":"<recipient-public-key>","amount":1,"memo":"hello"}'
+```
+
+Reward transactions are created only by mining. The reward is `1`, paid to the block creator, and must be the first transaction in a mined block.
+
+## Mining
+
+```bash
+curl -s -X POST http://127.0.0.1:9000/mine \
+  -d '{"blocks":1,"max_txs":50}'
+```
+
+Mining builds a candidate on the current canonical tip, adds one reward transaction, selects valid pending transactions, and searches for a nonce whose block hash starts with the configured number of zeroes.
+
+Progress is observable while mining:
+
+```bash
+curl -s http://127.0.0.1:9000/mining/status
+```
+
+If the canonical parent changes during mining, the node stops that candidate and restarts on the new tip.
+
+## Consensus Rule
+
+Nodes store forks instead of discarding them.
+
+Fork choice is deterministic:
+
+```text
+1. higher valid height wins
+2. if tied, higher total transaction count wins
+3. if tied, newer tip timestamp wins
+4. if tied, lexicographically smaller tip hash wins
+```
+
+Balances are derived from the canonical chain by replaying rewards and transfers from genesis to tip.
+
+## API
+
+Detailed endpoint documentation is in [api.md](api.md).
+
+```text
+GET  /ping
+GET  /status
+GET  /peers
+POST /peers
+
+GET  /wallet
+POST /transactions/create
+POST /transactions
+GET  /transactions
+
+POST /mine
+GET  /mining/status
+
+POST /blocks
+GET  /blocks/{hash}
+GET  /hashes
+GET  /chain
+GET  /chain/status
+GET  /balances
+
+GET  /events
+POST /debug/faults
+```
+
+Blocked peers are skipped for peer sync, transaction gossip, and block gossip.
+
+## Scenario Scripts
+
+Each script starts node processes, triggers transaction/block activity or connectivity faults, shows a live node table, pauses before shutdown, and records the event timeline in a `.log` file beside the script. Node state from each run is saved under:
+
+```text
+ledger_runs/<scenario_name>/<node_port>/
 ```
 
 ```bash
-python3 scripts/demo.py
+python3 scripts/scenarios/01_no_sync_divergence.py
+python3 scripts/scenarios/02_mining_convergence.py
+python3 scripts/scenarios/03_longer_chain_reorg.py
+python3 scripts/scenarios/04_invalid_data_rejection.py
+python3 scripts/scenarios/05_orphan_block_recovery.py
+python3 scripts/scenarios/06_partition_failure.py
+python3 scripts/scenarios/07_overload_failure.py --nodes 50 --duration 120
+python3 scripts/scenarios/08_node_capacity.py --nodes 20 --miners 4 --duration 20
 ```
 
-See käivitab päris lokaalsed sõlmed ja näitab järjest:
+All scripts accept `--difficulty <n>` and default to difficulty `4`.
 
-1. mõõdukat 10-sõlmelist konsensuse katset,
-2. baseline divergence olukorda ilma konsensuseta,
-3. convergence olukorda konsensusega,
-4. bad actor olukorda, kus vigase id-ga `/inv` lükatakse tagasi,
-5. no-quorum consensus failure olukorda,
-6. leader failure olukorda.
+### Results
 
-Ühe konkreetse osa käivitamiseks:
 
-```bash
-python3 scripts/demo.py --scenario moderate
-python3 scripts/demo.py --scenario converge
-python3 scripts/demo.py --scenario bad-actor
-python3 scripts/demo.py --scenario no-quorum
-python3 scripts/demo.py --scenario leader-failure
+| Scenario | Situation created | Actual result |
+| --- | --- | --- |
+| `01_no_sync_divergence.py` | Three isolated nodes independently mined heights `8`, `5`, and `11`. | `PASS`: at about `15s`, all three nodes had different canonical tips. |
+| `02_mining_convergence.py` | Five connected nodes; node 9000 mined six rewards, submitted four transfers, then mined eight more blocks. | `PASS`: at about `20s`, all `5/5` nodes had the same height-`14` tip and mempool size `0`. |
+| `03_longer_chain_reorg.py` | Four nodes split into two partitions; one side mined `90` blocks and the other `45`, then communication was restored. | `PASS`: two branch tips existed during the split; after healing, all `4/4` nodes selected the height-`90` branch at about `119s`. |
+| `04_invalid_data_rejection.py` | Three connected nodes received a forged transaction, wrong block hash, insufficient proof-of-work, and incorrect Merkle root, followed by one valid block. | `PASS`: all four invalid requests returned HTTP `400`; the valid block synchronized to all nodes at height `1`. |
+| `05_orphan_block_recovery.py` | Two nodes; a height-`2` child block was sent before its height-`1` parent. | `PASS`: receiver reported `orphans=1`, then `orphans=0` and the same height-`2` tip after its parent arrived. |
+| `06_partition_failure.py` | Six nodes split into groups of three; each side mined eight blocks and the split was not healed. | `EXPECTED FAILURE`: at about `15s`, both partitions were at height `8` but retained two different tips. |
+| `07_overload_failure.py --nodes 30 --miners 6 --duration 45 --tx-interval 0.2` | Thirty nodes processed concurrent transfers while six miners competed. | `EXPECTED FAILURE`: final snapshot answered for `29/30` nodes with `1786` total pending mempool entries; the responding nodes shared one height-`17` tip. |
+| `08_node_capacity.py` | A funded sender submitted transfers every `0.2s` while four miners competed for ten blocks each; node count was increased between runs. | `20` nodes passed; `25` and `30` nodes eventually converged but each had an unresponsive node during active load. |
+
+### Capacity Measurement
+
+`08_node_capacity.py` measures loaded operation. Before measuring, node `9000` mines `12` blocks so it owns spendable funds. During the measured phase it submits a signed transfer every `0.2s` while four nodes concurrently mine ten proof-of-work blocks each. After submission stops, the run passes only when:
+
+```text
+every node responded throughout the loaded phase
+at least one normal transfer was included in the canonical chain
+all nodes eventually reached one canonical tip
+all mining jobs completed
 ```
 
-Skript prindib iga osa juures `open:` URL-i kujul `http://127.0.0.1:<port>/experiments`. Ava see leht üks kord brauseris; see leiab demo abiserveri ise ja uuendab skaneeritavaid porte automaatselt, kui demo liigub järgmise osa juurde.
+Measured with `--miners 4 --funding-blocks 12 --duration 20 --tx-interval 0.2 --work-blocks 10`:
 
-Kui tahad kinnitust iga olulise sammu juures ja et iga valitud stsenaarium jääks enne sulgemist korraks käima:
+| Nodes | Responsive throughout load | Transfers submitted / included | Peak tips | Final state | Result |
+| ---: | --- | ---: | ---: | --- | --- |
+| 10 | `10/10` | `86 / 20` | `5` | `10/10` settled on one tip | `PASS` |
+| 20 | `20/20` | `63 / 18` | `5` | `20/20` settled on one tip | `PASS` |
+| 25 | `24/25` | `51 / 18` | `7` | Eventually settled on one tip | `EXPECTED FAILURE` |
+| 30 | `29/30` | `46 / 16` | `4` | Eventually settled on one tip | `EXPECTED FAILURE` |
 
-```bash
-python3 scripts/demo.py --step
+The failure at `25` and `30` nodes is overload during activity, but not permanent ledger disagreement. One status request timed out during active transfer/mining load, but the network later converged after the work stopped. Pending mempool totals are aggregate copies across nodes.
+
 ```
 
-| Katse | Tulemus |
-|-------|---------|
-| `--divergence` | 3 sõlme ilma konsensuseta ja forwardinguta tekitasid 3 erinevat ledger hash'i. |
-| `--converge` | 5 sõlme konsensusega jõudsid sama 3-transaktsioonilise ledgerini, hash `727d2d52...`. |
-| `--leader-failure` | Round 0 juht `127.0.0.1:9650` peatati; ellujäänud sõlmed jäid seisma, ledger jäi tühjaks ja tx jäi mempooli. |
-| `--invalid` | Bad actor saatis vigase id-ga `/inv`; sõlm vastas `400`; järgnev korrektne tx commititi kõigis 3 sõlmes. |
-| `--no-quorum` | 1 sõlm + 4 kättesaamatut phantom peer'i ei commitinud 15s jooksul; ledger `0`, mempool `1`. |
-| `--partition` | 3-sõlmeline ja 2-sõlmeline eraldatud grupp converge'isid eraldi, aga erinevate hashidega `3bb45d32...` ja `268dae33...`. |
-| `--load --load-sizes 5 --load-duration 5` | 5 sõlme, 20 postitatud tx, 0 ebaõnnestunud posti, kõik sõlmed jõudsid sama ledger hash'ini umbes 5.0s-ga. |
+The live table exposes the values used to interpret a run:
 
-### Konsensuse skaleerimise mõõtmine
-
-
-```bash
-python3 tests/test_prax2.py --base-port 23000 --divergence
-python3 tests/test_prax2.py --base-port 24000 --load --load-sizes 10,20,30 --load-duration 5
-python3 tests/test_prax2.py --base-port 26000 --load --load-sizes 40,50,75,100 --load-duration 5
-python3 tests/test_prax2.py --base-port 30000 --load --load-sizes 110,120 --load-duration 5
-python3 tests/test_prax2.py --base-port 28000 --load --load-sizes 125,150,200 --load-duration 5
+```text
+height   canonical chain length selected by that node
+tip      short hash of that node's selected chain end
+mempool  pending transactions not yet included in the canonical chain
+orphans  blocks waiting for an unknown parent block
+mining   whether that node is currently searching for a valid nonce
+attempts number of nonce candidates tried for the current mining job
 ```
 
-| Variant | Sõlmi | Postitatud tx | Ebaõnnestunud postid | Ledgeri kokkulangevus | Tulemus |
-|---------|------:|--------------:|---------------------:|------------------------|---------|
-| Konsensuseta | 3 | 3 | 0 | 3 erinevat hash'i / 3 sõlme | kokkulepet ei tekkinud |
-| Konsensusega | 10 | 20 | 0 | 10/10 sama pikkus, 1 hash | converge'is |
-| Konsensusega | 20 | 20 | 0 | 20/20 sama pikkus, 1 hash | converge'is |
-| Konsensusega | 30 | 20 | 0 | 30/30 sama pikkus, 1 hash | converge'is |
-| Konsensusega | 40 | 20 | 0 | 40/40 sama pikkus, 1 hash | converge'is |
-| Konsensusega | 50 | 20 | 0 | 50/50 sama pikkus, 1 hash | converge'is |
-| Konsensusega | 75 | 20 | 0 | 75/75 sama pikkus, 1 hash | converge'is, aga aeglaselt |
-| Konsensusega | 100 | 20 | 0 | 100/100 sama pikkus, 1 hash | converge'is |
-| Konsensusega | 110 | 19 | 1 | 2 hash'i, osa sõlmi snapshotis kättesaamatud | ei converge'inud timeouti jooksul |
-| Konsensusega | 120 | 2 | 2 | 2 hash'i, mitu sõlme snapshotis kättesaamatud | ei converge'inud timeouti jooksul |
-| Konsensusega | 125 | 0 | n/a | sõlm `28536` ei käivitunud | käivitus kukkus läbi |
-
-Selles masinas ja lühikese 5-sekundilise koormusega on praktiline piir umbes 100-110 sõlme vahel. 75 sõlme converge'is, aga selleks kulus umbes 73.7 sekundit. 110+ sõlme juures hakkasid tekkima HTTP timeoutid ja snapshotis kättesaamatud sõlmed, mistõttu kõik sõlmed ei jõudnud testiaja sees sama ledgerini.

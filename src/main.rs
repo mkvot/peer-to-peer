@@ -1,27 +1,35 @@
+mod block;
+mod chain;
 mod client;
-mod consensus;
+mod config;
 mod crypto;
 mod http;
-mod ledger;
+mod mining;
 mod models;
+mod peers;
 mod routes;
 mod server;
 mod state;
 mod storage;
+mod transaction;
+mod wallet;
 
-use crate::state::{NodeConfig, NodeState};
-use crate::storage::init_storage;
 use std::{
-    env, fs,
+    env,
     io::Result,
     path::PathBuf,
     sync::{Arc, Mutex},
     thread,
 };
 
+use crate::{
+    config::NodeConfig,
+    peers::{push_peer_values, sort_dedup},
+    state::NodeState,
+};
+
 struct CliOptions {
     port: String,
-    advertise_ip: String,
     bind_ip: String,
     peers: Vec<String>,
     config: NodeConfig,
@@ -29,33 +37,30 @@ struct CliOptions {
 
 fn main() -> Result<()> {
     let options = parse_args();
-
     let bind_addr = format!("{}:{}", options.bind_ip, options.port);
-    let announce_addr = format!("{}:{}", options.advertise_ip, options.port);
-    let mut node_state = NodeState::with_config(announce_addr, bind_addr, options.config);
-    init_storage(&mut node_state)?;
-    let state: Arc<Mutex<NodeState>> = Arc::new(Mutex::new(node_state));
+    let node_addr = bind_addr.clone();
 
-    if !options.peers.is_empty() {
-        let mut state = state.lock().unwrap();
-        state.peers = options.peers;
-        for peer in state.peers.iter() {
-            println!("  {peer}");
-        }
-    }
+    let mut node_state = NodeState::new(node_addr, bind_addr, options.config)?;
+    node_state.peers = options.peers;
+    storage::init_storage(&mut node_state)?;
+
+    println!(
+        "[node] addr={} difficulty={} data_dir={}",
+        node_state.addr,
+        node_state.config.difficulty,
+        node_state.data_dir.display()
+    );
+
+    let state: Arc<Mutex<NodeState>> = Arc::new(Mutex::new(node_state));
 
     let client_state = state.clone();
     thread::spawn(move || {
-        client::start(client_state).unwrap();
+        if let Err(error) = client::start(client_state) {
+            eprintln!("client loop failed: {error}");
+        }
     });
 
-    if state.lock().unwrap().consensus_enabled {
-        consensus::start_consensus_loop(state.clone())?;
-    }
-
-    let server_state = state.clone();
-    server::start(server_state)?;
-    Ok(())
+    server::start(state)
 }
 
 fn parse_args() -> CliOptions {
@@ -66,32 +71,16 @@ fn parse_args() -> CliOptions {
     }
 
     let port = args[0].clone();
-    let mut advertise_ip = "127.0.0.1".to_string();
-    let mut bind_ip = "0.0.0.0".to_string();
+    let mut bind_ip = "127.0.0.1".to_string();
     let mut peers = Vec::new();
     let mut config = NodeConfig::default();
-    let mut legacy_positionals = Vec::new();
 
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--peer" => {
-                let value = required_value(&args, i, "--peer");
-                push_peer_values(&mut peers, value, &port);
-                i += 2;
-            }
             "--peers" => {
                 let value = required_value(&args, i, "--peers");
                 push_peer_values(&mut peers, value, &port);
-                i += 2;
-            }
-            "--peers-file" => {
-                let value = required_value(&args, i, "--peers-file");
-                peers.extend(load_peers_file(value, &port));
-                i += 2;
-            }
-            "--advertise-ip" | "--ip" => {
-                advertise_ip = required_value(&args, i, args[i].as_str()).to_string();
                 i += 2;
             }
             "--bind-ip" => {
@@ -102,30 +91,14 @@ fn parse_args() -> CliOptions {
                 config.data_dir_base = PathBuf::from(required_value(&args, i, "--data-dir"));
                 i += 2;
             }
-            "--round-secs" => {
-                config.round_secs = required_value(&args, i, "--round-secs")
+            "--difficulty" => {
+                config.difficulty = required_value(&args, i, "--difficulty")
                     .parse()
                     .unwrap_or_else(|_| {
-                        eprintln!("--round-secs must be a positive integer");
+                        eprintln!("--difficulty must be a non-negative integer");
                         std::process::exit(2);
                     });
                 i += 2;
-            }
-            "--consensus" => {
-                config.consensus_enabled = true;
-                i += 1;
-            }
-            "--no-consensus" => {
-                config.consensus_enabled = false;
-                i += 1;
-            }
-            "--forward-inv" => {
-                config.forward_inv_enabled = true;
-                i += 1;
-            }
-            "--no-forward-inv" => {
-                config.forward_inv_enabled = false;
-                i += 1;
             }
             value if value.starts_with("--") => {
                 eprintln!("unknown option: {value}");
@@ -133,25 +106,16 @@ fn parse_args() -> CliOptions {
                 std::process::exit(2);
             }
             value => {
-                legacy_positionals.push(value.to_string());
-                i += 1;
+                eprintln!("unexpected positional argument: {value}");
+                print_usage();
+                std::process::exit(2);
             }
         }
     }
 
-    if let Some(path) = legacy_positionals.first() {
-        peers.extend(load_peers_file(path, &port));
-    }
-    if let Some(ip) = legacy_positionals.get(1) {
-        advertise_ip = ip.clone();
-    }
-
-    peers.sort();
-    peers.dedup();
-
+    sort_dedup(&mut peers);
     CliOptions {
         port,
-        advertise_ip,
         bind_ip,
         peers,
         config,
@@ -165,66 +129,18 @@ fn required_value<'a>(args: &'a [String], index: usize, name: &str) -> &'a str {
     })
 }
 
-fn push_peer_values(peers: &mut Vec<String>, value: &str, default_port: &str) {
-    for peer in value.split(',') {
-        let peer = normalize_peer(peer, default_port);
-        if !peer.is_empty() {
-            peers.push(peer);
-        }
-    }
-}
-
-fn load_peers_file(path: &str, default_port: &str) -> Vec<String> {
-    let json = fs::read_to_string(path).unwrap_or_else(|e| {
-        eprintln!("failed to read peers file {path}: {e}");
-        std::process::exit(2);
-    });
-    let peer_info: Vec<String> = serde_json::from_str(&json).unwrap_or_else(|e| {
-        eprintln!("failed to parse peers file {path}: {e}");
-        std::process::exit(2);
-    });
-
-    peer_info
-        .iter()
-        .map(|peer| normalize_peer(peer, default_port))
-        .filter(|peer| !peer.is_empty())
-        .collect()
-}
-
-fn normalize_peer(peer: &str, default_port: &str) -> String {
-    let peer = peer
-        .trim()
-        .trim_start_matches("http://")
-        .trim_start_matches("https://")
-        .trim_end_matches('/');
-    if peer.is_empty() {
-        return String::new();
-    }
-    if peer.contains(':') {
-        peer.to_string()
-    } else {
-        format!("{peer}:{default_port}")
-    }
-}
-
 fn print_usage() {
     println!(
         "Usage: peer-to-peer <port> [options]\n\
 \n\
 Options:\n\
-  --peer <addr-or-ip>       Add one peer. If no port is given, this node's port is used.\n\
-  --peers <a,b,c>           Add comma-separated peers.\n\
-  --peers-file <path>       Load peers from a JSON array.\n\
-  --advertise-ip <ip>       Address other machines should use for this node. Default: 127.0.0.1.\n\
-  --bind-ip <ip>            Local bind address. Default: 0.0.0.0.\n\
-  --data-dir <path>         Base directory for per-node ledgers. Default: data.\n\
-  --round-secs <seconds>    Consensus tick interval. Default: 2.\n\
-  --no-consensus            Append transactions locally without consensus.\n\
-  --forward-inv             Gossip transactions directly between peers.\n\
+  --peers <addr,addr>       Add one or more peers.\n\
+  --bind-ip <ip>            Local bind address. Default: 127.0.0.1.\n\
+  --data-dir <path>         Base directory for per-node data. Default: ledger_data.\n\
+  --difficulty <n>          Leading-zero proof-of-work difficulty. Default: 4.\n\
 \n\
 Examples:\n\
-  peer-to-peer 9000 --data-dir /tmp/p2p-demo\n\
-  peer-to-peer 9001 --peer 127.0.0.1:9000 --data-dir /tmp/p2p-demo\n\
-  peer-to-peer 9000 --advertise-ip 192.168.1.10 --peer 192.168.1.20\n"
+  peer-to-peer 9000 --data-dir ledger_data --difficulty 4\n\
+  peer-to-peer 9001 --peers 127.0.0.1:9000 --data-dir ledger_data\n"
     );
 }

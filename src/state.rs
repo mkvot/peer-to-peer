@@ -1,77 +1,85 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::VecDeque,
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    path::PathBuf,
+};
 
-use indexmap::IndexMap;
+use crate::{
+    chain,
+    config::NodeConfig,
+    crypto::now_millis,
+    models::{ChainState, EVENT_LIMIT, EventRecord, RecentEvents, Wallet},
+    wallet::load_or_create_wallet,
+};
 
-use crate::models::{Commit, GENESIS_LEDGER_HASH, Transaction};
-
-pub struct NodeConfig {
-    pub consensus_enabled: bool,
-    pub forward_inv_enabled: bool,
-    pub round_secs: u64,
-    pub data_dir_base: PathBuf,
-}
-
-impl Default for NodeConfig {
-    fn default() -> Self {
-        Self {
-            consensus_enabled: true,
-            forward_inv_enabled: false,
-            round_secs: 2,
-            data_dir_base: PathBuf::from("data"),
-        }
-    }
-}
-
-#[derive(Clone)]
 pub struct NodeState {
     pub addr: String,
     pub bind_addr: String,
     pub peers: Vec<String>,
-    pub blocks: IndexMap<String, String>,
-    pub tx_pool: IndexMap<String, Transaction>,
-    pub ledger: Vec<Transaction>,
-    pub ledger_ids: HashSet<String>,
-    pub commits: Vec<Commit>,
-    pub ledger_hash: String,
-    pub next_round: u64,
-    pub local_seq: u64,
-    pub consensus_enabled: bool,
-    pub forward_inv_enabled: bool,
-    pub round_secs: u64,
+    pub wallet: Wallet,
+    pub chain: ChainState,
+    pub config: NodeConfig,
     pub data_dir: PathBuf,
-    pub blocked_peers: HashSet<String>,
+    pub events: RecentEvents,
 }
 
 impl NodeState {
-    #[cfg(test)]
-    pub fn new(addr: String, bind_addr: String) -> Self {
-        Self::with_config(addr, bind_addr, NodeConfig::default())
-    }
-
-    pub fn with_config(addr: String, bind_addr: String, config: NodeConfig) -> Self {
-        let data_dir = node_data_dir(&addr, config.data_dir_base);
-        NodeState {
+    pub fn new(addr: String, bind_addr: String, config: NodeConfig) -> io::Result<Self> {
+        let data_dir = node_data_dir(&addr, config.data_dir_base.clone());
+        let wallet = load_or_create_wallet(&data_dir)?;
+        Ok(Self {
             addr,
             bind_addr,
             peers: Vec::new(),
-            blocks: IndexMap::new(),
-            tx_pool: IndexMap::new(),
-            ledger: Vec::new(),
-            ledger_ids: HashSet::new(),
-            commits: Vec::new(),
-            ledger_hash: GENESIS_LEDGER_HASH.to_string(),
-            next_round: 0,
-            local_seq: 0,
-            consensus_enabled: config.consensus_enabled,
-            forward_inv_enabled: config.forward_inv_enabled,
-            round_secs: config.round_secs,
+            wallet,
+            chain: ChainState::new(config.difficulty),
+            config,
             data_dir,
-            blocked_peers: HashSet::new(),
+            events: VecDeque::new(),
+        })
+    }
+
+    pub fn record_event(&mut self, kind: &str, message: impl Into<String>) {
+        let event = EventRecord {
+            time_ms: now_millis() as u128,
+            kind: kind.to_string(),
+            message: message.into(),
+        };
+
+        println!("[{}] {}", event.kind, event.message);
+
+        self.events.push_back(event.clone());
+        while self.events.len() > EVENT_LIMIT {
+            self.events.pop_front();
         }
+
+        if fs::create_dir_all(&self.data_dir).is_ok() {
+            let path = self.data_dir.join("events.jsonl");
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+                if let Ok(line) = serde_json::to_string(&event) {
+                    let _ = writeln!(file, "{line}");
+                }
+            }
+        }
+    }
+
+    pub fn status_json(&self) -> serde_json::Value {
+        let best = chain::best_block(&self.chain);
+        serde_json::json!({
+            "addr": self.addr,
+            "height": best.map(|block| block.height).unwrap_or(0),
+            "tip": self.chain.best_tip,
+            "mempool": self.chain.mempool.len(),
+            "peers": self.peers.len(),
+            "orphans": chain::orphan_count(&self.chain),
+            "mining": self.chain.mining.active,
+            "difficulty": self.config.difficulty,
+        })
     }
 }
 
-fn node_data_dir(addr: &str, base: PathBuf) -> PathBuf {
+pub fn node_data_dir(addr: &str, base: PathBuf) -> PathBuf {
     let port = addr.rsplit(':').next().unwrap_or("unknown");
     base.join(port)
 }
