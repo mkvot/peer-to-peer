@@ -168,7 +168,6 @@ Measured with `--miners 4 --funding-blocks 12 --duration 20 --tx-interval 0.2 --
 
 The failure at `25` and `30` nodes is overload during activity, but not permanent ledger disagreement. One status request timed out during active transfer/mining load, but the network later converged after the work stopped. Pending mempool totals are aggregate copies across nodes.
 
-```
 
 The live table exposes the values used to interpret a run:
 
